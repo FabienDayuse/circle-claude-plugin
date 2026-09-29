@@ -1,0 +1,441 @@
+import fs from 'node:fs'
+import assert from 'node:assert/strict'
+const SRC = process.argv[2]
+const src = fs.readFileSync(SRC, 'utf8')
+for (const bad of ['Date.now', 'Math.random', 'new Date(', 'require(', 'import ']) assert.ok(!src.includes(bad), `interdit : ${bad}`)
+const body = src.replace(/^export const meta = /m, 'const meta = ')
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+const run = new AsyncFunction('args', 'agent', 'phase', 'log', body)
+const ARGS = { plan: 'plans/p', phase: 1, mode: 'phase', parallelisme: 4, integration: 'plan/p', corrections_max: 2, escalade: ['sonnet', 'opus'] }
+const T00 = { id: 'T00', titre: 'Outillage', fichier: 'plans/p/taches/T00.md', phase: 1, modele: 'sonnet', depend_de: [], ressources: ['base-locale', 'port-3000'], statut: 'à-faire', verification: ['sh scripts/typecheck.sh', 'sh scripts/e2e-local.sh'] }
+const T01 = { id: 'T01', titre: 'Fondations', fichier: 'plans/p/taches/T01.md', phase: 1, modele: 'opus', depend_de: ['T00'], ressources: ['base-locale', 'port-3000'], statut: 'à-faire', verification: ['pnpm test'] }
+// Copies : le workflow amende verification et depend_de en mémoire
+const plan = (...ts) => ({ ok: true, taches: ts.map(t => ({ ...t })) })
+const rap = (n, extra = {}) => ({ statut: 'done', resume: `rapport ${n} : 96/96 trois fois`, branche: 'tache/T00', commit: 'c' + n, chemin: '/repo', decouvertes: [{ categorie: 'Commandes vérifiées', contenu: 'routes préchauffées ' + n }], ecarts: [], ...extra })
+const ok = (x) => ({ ok: true, resultats: [{ commande: 'sh scripts/typecheck.sh', code: 0, extrait: 'tsc ' + x }, { commande: 'sh scripts/e2e-local.sh', code: 0, extrait: '96 passed ' + x }] })
+const SOK = { ok: true, commit: 's1', refuses: [] }
+const FOK = { ok: true, fusionne: true, controle_ok: true, commit: 'm1' }
+const RIEN = { majeur: false, entrees: [], points: [] }
+const ECART = [{ type: 'écart', description: 'isSuperAdmin optionnel dans UpdateUserSchema' }]
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
+let dernier = null
+async function scenario(name, q, args = {}) {
+  const calls = [], logs = []
+  const agent = async (prompt, opts = {}) => {
+    calls.push({ prompt, opts })
+    const k = opts.label
+    if (!(k in q) || !q[k].length) throw new Error(`[${name}] appel inattendu : ${k}`)
+    const v = q[k].shift()
+    return typeof v === 'function' ? v(prompt, opts) : v
+  }
+  const res = await run({ ...ARGS, ...args }, agent, () => {}, (m) => logs.push(m))
+  dernier = res
+  return { res, calls, logs, q }
+}
+const byLabel = (calls, l) => calls.filter(c => c.opts.label === l)
+const idx = (calls, l) => calls.findIndex(c => c.opts.label === l)
+const vide = (name, q) => { for (const k in q) assert.equal(q[k].length, 0, `${name} : réponse non consommée pour ${k}`) }
+let n = 0
+async function cas(nom, fn) {
+  dernier = null
+  try { await fn(); n++; console.log('ok ·', nom) } catch (e) { console.log('ÉCHEC ·', nom, '\n', JSON.stringify(dernier, null, 1)); throw e }
+}
+// T00 fusionnée sans histoire, avec des écarts éventuels ; T01 idem
+const t00 = (ecarts = [], fusion = FOK) => ({ 'T00 · worker': [rap(0, { ecarts })], 'T00 · vérification': [ok(1)], 'T00 · évaluation': [{ verdict: 'ok' }], 'T00 · fusion': [fusion] })
+const t01 = () => ({ 'T01 · worker': [rap(1, { branche: 'tache/T01' })], 'T01 · vérification': [ok(2)], 'T01 · évaluation': [{ verdict: 'ok' }], 'T01 · fusion': [FOK], 'T01 · suivi': [SOK] })
+const RP_E = { majeur: true, entrees: [{ type: 'écart', gravite: 'majeur', description: 'contrat élargi' }], points: [{ titre: 'Contrat UpdateUserSchema', contexte: 'isSuperAdmin optionnel', options: [
+  { id: 'A', description: 'Garder optionnel et tester la règle (d)', impact: 'un test de plus', recommande: true,
+    entrees: [{ type: 'dette', gravite: 'mineur', description: 'documenter le contrat' }],
+    taches_ajoutees: [{ id: 'T00C', titre: 'Test règle d', phase: 0, contenu: '---\nid: T00C\nphase: 0\nmodele: sonnet\n---\n' }],
+    amendements: [{ id: 'T01', verification: ['pnpm test:regle-d'], definition_du_fini: ['la règle (d) est testée'], raison: 'règle de sécurité sans test' }] },
+  { id: 'B', description: 'Rendre le champ obligatoire', impact: 'casse les appels partiels', recommande: false } ] }] }
+
+// ——— Non-régression v0.3 ———
+await cas('A : T00 bloquée après 2 refus, T01 non lancée', async () => {
+  const { res, calls, q } = await scenario('A', {
+    'lecteur-plan': [plan(T00, T01)], 'T00 · worker': [rap(0)],
+    'T00 · vérification': [ok(1), ok(2), { ok: false, resultats: [{ commande: 'sh scripts/e2e-local.sh', code: 1, extrait: '95 passed, 1 failed' }], echecs: [{ commande: 'sh scripts/e2e-local.sh', extrait: 'ECONNRESET /healthz' }] }],
+    'T00 · évaluation': [{ verdict: 'ko', manques: ['A1', 'A2'] }, { verdict: 'ko', manques: ['B1'] }],
+    'T00 · correction 1': [rap(1)], 'T00 · correction 2': [rap(2)],
+    'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const t = res.taches.find(x => x.id === 'T00')
+  assert.equal(res.statut, 'partiel'); assert.equal(t.statut, 'bloquée'); assert.equal(t.essais, 3)
+  assert.deepEqual(t.blocage, ['sh scripts/e2e-local.sh : ECONNRESET /healthz'])
+  assert.deepEqual(t.refus, [{ essai: 1, par: 'évaluation', manques: ['A1', 'A2'] }, { essai: 2, par: 'évaluation', manques: ['B1'] }])
+  assert.deepEqual(res.non_lancees, ['T01'])
+  assert.equal(byLabel(calls, 'T00 · correction 1')[0].opts.model, 'sonnet'); assert.equal(byLabel(calls, 'T00 · correction 2')[0].opts.model, 'opus')
+  const ev = byLabel(calls, 'T00 · évaluation')
+  assert.ok(ev[0].prompt.includes('96 passed 1') && !ev[0].prompt.includes('96 passed 2'))
+  assert.ok(ev[1].prompt.includes('96 passed 2') && ev[1].prompt.includes('rapport 1 : 96/96') && ev[1].prompt.includes('pas une preuve'))
+  const rp = byLabel(calls, 'T00 · replanification')[0]
+  assert.equal(rp.opts.model, 'opus'); assert.ok(rp.prompt.includes(', dans /repo') && rp.prompt.includes('plans/p/taches/T00.md'), 'replan : chemin du travail non fusionné')
+  const sc = byLabel(calls, 'T00 · suivi')[0]
+  assert.ok(sc.opts.schema.required.includes('ok'), 'scribe : schéma')
+  assert.ok(sc.prompt.includes('refus · mineur') && sc.prompt.includes('"A1"') && sc.prompt.includes('ce blocage') && !sc.prompt.includes('plan-lint.mjs'), 'scribe : refus et blocage, pas de plan-lint sans création')
+  vide('A', q)
+})
+await cas('B : T00 fusionnée après 1 refus + instable, T01 bloquée par son worker', async () => {
+  const { res, calls, q } = await scenario('B', {
+    'lecteur-plan': [plan(T00, T01)], 'T00 · worker': [rap(0)],
+    'T00 · vérification': [ok(1), { ...ok(2), instables: ['journal.spec.ts:53'] }],
+    'T00 · évaluation': [{ verdict: 'ko', manques: ['C1'] }, { verdict: 'ok' }],
+    'T00 · correction 1': [rap(1)], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK],
+    'T01 · worker': [{ statut: 'blocked', resume: 'bloqué', branche: 'tache/T01', chemin: '/repo', blocage: 'schéma ambigu' }],
+    'T01 · replanification': [RIEN], 'T01 · suivi': [SOK] })
+  const t0 = res.taches.find(x => x.id === 'T00'), t1 = res.taches.find(x => x.id === 'T01')
+  assert.equal(res.statut, 'partiel'); assert.equal(t0.statut, 'fusionnée'); assert.equal(t0.essais, 2); assert.ok(!('blocage' in t0))
+  assert.deepEqual(t0.refus, [{ essai: 1, par: 'évaluation', manques: ['C1'] }]); assert.deepEqual(t0.instables, ['journal.spec.ts:53'])
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('refus · mineur') && sc.includes('Tests instables') && !sc.includes('ce blocage'))
+  assert.equal(t1.statut, 'bloquée'); assert.deepEqual(t1.blocage, ['schéma ambigu'])
+  vide('B', q)
+})
+await cas('C : vérificateur sans réponse puis succès ; intégrateur au format v0.3', async () => {
+  const { res, q } = await scenario('C', {
+    'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0)],
+    'T00 · vérification': [null, ok(2)], 'T00 · évaluation': [{ verdict: 'ok' }],
+    'T00 · correction 1': [rap(1)], 'T00 · fusion': [{ ok: true }], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé'); assert.equal(res.taches[0].statut, 'fusionnée')
+  assert.deepEqual(res.taches[0].refus, [{ essai: 1, par: 'vérification', manques: ['vérificateur sans réponse'] }])
+  vide('C', q)
+})
+await cas('D : critère non vérifiable → angle mort et replanification, sans KO ni doublon', async () => {
+  const NV = 'typecheck.sh depuis un worktree : la tâche tourne dans le checkout principal'
+  const { res, calls, q } = await scenario('D', {
+    'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0)],
+    'T00 · vérification': [{ ...ok(1), instables: ['journal.spec.ts:53'] }, { ...ok(2), instables: ['journal.spec.ts:53'] }],
+    'T00 · évaluation': [{ verdict: 'ko', manques: ['M1'], non_verifiables: [NV] }, { verdict: 'ok', non_verifiables: [NV] }],
+    'T00 · correction 1': [rap(1)], 'T00 · fusion': [FOK], 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const t = res.taches[0]
+  assert.equal(res.statut, 'terminé'); assert.equal(t.statut, 'fusionnée'); assert.deepEqual(t.non_verifiables, [NV])
+  assert.ok(byLabel(calls, 'T00 · replanification')[0].prompt.includes(NV), 'replan : critère non vérifiable transmis')
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('angle-mort · mineur') && sc.split(NV).length === 2 && sc.split('journal.spec.ts:53').length === 2)
+  vide('D', q)
+})
+
+// ——— v0.4 : décisions d'office et garde-fous ———
+await cas("E : autonome, option recommandée prise d'office (amendement, tâche ajoutée ramenée en phase courante)", async () => {
+  const { res, calls, q } = await scenario('E', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [RP_E], 'T00 · suivi': [SOK], ...t01() }, { mode: 'auto' })
+  assert.equal(res.statut, 'à-relancer')
+  assert.deepEqual(res.decisions_office, [{ tache: 'T00', titre: 'Contrat UpdateUserSchema', option: 'A', description: 'Garder optionnel et tester la règle (d)' }])
+  const rp = byLabel(calls, 'T00 · replanification')[0]
+  assert.equal(rp.opts.model, 'opus'); assert.ok(rp.prompt.includes('Mode autonome') && rp.prompt.includes(', fusionnée dans plan/p'))
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  for (const x of ["option A prise d'office (mode autonome)", '"id":"T00C"', 'phase: 1', 'pnpm test:regle-d', 'amendement · majeur', 'plan-lint.mjs plans/p --integration plan/p', 'documenter le contrat', 'contrat élargi', 'git checkout HEAD --'])
+    assert.ok(sc.includes(x), 'scribe : ' + x)
+  assert.ok(!sc.includes('phase: 0'), 'scribe : phase passée corrigée')
+  assert.ok(byLabel(calls, 'T01 · vérification')[0].prompt.includes('pnpm test:regle-d'), 'T01 : vérification amendée')
+  assert.ok(byLabel(calls, 'T01 · worker')[0].prompt.includes("Garder optionnel et tester la règle (d) (prise d'office)"), 'T01 : décision transmise')
+  assert.deepEqual(res.taches_ajoutees, [{ id: 'T00C', phase: 1, titre: 'Test règle d' }])
+  vide('E', q)
+})
+const pt = i => ({ titre: 'P' + i, contexte: '', options: [{ id: 'A', description: 'a' + i, recommande: true }, { id: 'B', description: 'b' + i }] })
+await cas('F : coupe-circuit au 4e point (plafond 3 par défaut)', async () => {
+  const { res, calls, q } = await scenario('F', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [{ majeur: true, entrees: [], points: [pt(1), pt(2), pt(3), pt(4)] }], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.decisions_office.length, 3)
+  assert.equal(res.arbitrage.titre, 'P4'); assert.equal(res.arbitrage.coupe_circuit, true); assert.equal(res.arbitrage.humain, false)
+  assert.deepEqual(res.non_lancees, ['T01']); assert.equal(idx(calls, 'T01 · worker'), -1)
+  vide('F', q)
+})
+await cas('F2 : plafond transmis à 0, points suivants gardés', async () => {
+  const { res, q } = await scenario('F2', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [{ majeur: true, entrees: [], points: [pt(1), pt(2)] }], 'T00 · suivi': [SOK] }, { mode: 'auto', decisions_office_max: 0 })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.decisions_office.length, 0)
+  assert.equal(res.arbitrage.titre, 'P1'); assert.equal(res.points_a_trancher.length, 1); assert.equal(res.points_a_trancher[0].coupe_circuit, true)
+  vide('F2', q)
+})
+await cas('G : point humain en autonome → arrêt', async () => {
+  const { res, calls, q } = await scenario('G', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [{ majeur: true, entrees: [], points: [{ titre: 'Accès prod', humain: true, options: [] }] }], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.humain, true); assert.equal(res.arbitrage.titre, 'Accès prod')
+  assert.equal(res.decisions_office.length, 0); assert.equal(idx(calls, 'T01 · worker'), -1)
+  vide('G', q)
+})
+await cas('G2 : écart besoin-humain sans point humain → arrêt quand même', async () => {
+  const { res, q } = await scenario('G2', { 'lecteur-plan': [plan(T00, T01)], ...t00([{ type: 'besoin-humain', description: 'clé API requise' }]), 'T00 · replanification': [{ majeur: false, entrees: [{ type: 'besoin-humain', gravite: 'majeur', description: 'clé' }], points: [] }], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.titre, 'Besoin humain signalé par T00'); assert.ok(res.arbitrage.contexte.includes('clé API requise'))
+  vide('G2', q)
+})
+await cas('H : contrôle post-fusion en échec → fusionnée + besoin-humain + arrêt', async () => {
+  const { res, calls, q } = await scenario('H', { 'lecteur-plan': [plan(T00, T01)], ...t00([], { ok: false, fusionne: true, controle_ok: false, detail: 'tsc : 2 erreurs' }), 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.taches[0].statut, 'fusionnée'); assert.equal(res.statut, 'arbitrage')
+  assert.equal(res.arbitrage.humain, true); assert.ok(res.arbitrage.titre.includes('Contrôle post-fusion'))
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('besoin-humain') && sc.includes('tsc : 2 erreurs') && sc.includes('statut « fusionnée »'))
+  assert.deepEqual(res.non_lancees, ['T01']); assert.equal(idx(calls, 'T00 · replanification'), -1)
+  vide('H', q)
+})
+await cas('H2 : conflit de fusion → bloquée', async () => {
+  const { res, q } = await scenario('H2', { 'lecteur-plan': [plan(T00)], ...t00([], { ok: false, fusionne: false, conflit: true, detail: 'conflit src/a.ts' }), 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'partiel'); assert.equal(res.taches[0].statut, 'bloquée'); assert.deepEqual(res.taches[0].blocage, ['fusion : conflit src/a.ts'])
+  vide('H2', q)
+})
+await cas('I1 : par phase, le point reste à trancher avec ses actions ; tâche ajoutée en phase 2', async () => {
+  const rp = { ...RP_E, taches_ajoutees: [{ id: 'T09', titre: 'Doc', phase: 2, contenu: '---\nid: T09\nphase: 2\n---' }] }
+  const { res, calls, q } = await scenario('I1', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [rp], 'T00 · suivi': [SOK], ...t01() })
+  assert.equal(res.statut, 'terminé'); assert.equal(res.points_a_trancher.length, 1); assert.equal(res.decisions_office.length, 0)
+  assert.equal(res.points_a_trancher[0].options[0].amendements[0].id, 'T01', 'actions gardées pour args.arbitrages')
+  assert.equal(byLabel(calls, 'T00 · replanification')[0].opts.model, 'opus')
+  assert.ok(!byLabel(calls, 'T01 · vérification')[0].prompt.includes('pnpm test:regle-d'), 'rien appliqué sans arbitrage')
+  assert.deepEqual(res.taches_ajoutees, [{ id: 'T09', phase: 2, titre: 'Doc' }])
+  vide('I1', q)
+})
+await cas('I2 : arrêt sur déviation', async () => {
+  const { res, q } = await scenario('I2', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [RP_E], 'T00 · suivi': [SOK] }, { mode: 'devia' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.titre, 'Contrat UpdateUserSchema'); assert.deepEqual(res.non_lancees, ['T01'])
+  vide('I2', q)
+})
+const ARB = [{ tache: 'T02', titre: 'Contrat', option: { id: 'B', description: 'Tester la règle d', entrees: [{ type: 'dette', gravite: 'mineur', description: 'x' }], amendements: [{ id: 'T01', verification: ['pnpm test:d'], raison: 'r' }], taches_ajoutees: [{ id: 'T01B', titre: 'Doc', phase: 0, contenu: '---\nid: T01B\nphase: 0\n---' }] } }]
+await cas("J : arbitrage de l'utilisateur appliqué par le scribe avant la lecture du plan", async () => {
+  const { res, calls, q } = await scenario('J', { 'arbitrage T02 · suivi': [SOK], 'lecteur-plan': [plan(T00)], ...t00(), 'T00 · suivi': [SOK] }, { arbitrages: ARB })
+  assert.equal(idx(calls, 'arbitrage T02 · suivi'), 0); assert.equal(idx(calls, 'lecteur-plan'), 1)
+  const sc = byLabel(calls, 'arbitrage T02 · suivi')[0].prompt
+  for (const x of ["option B arbitrée par l'utilisateur", 'pnpm test:d', 'phase: 1', '## T02', 'plan-lint.mjs', 'arbitrage B']) assert.ok(sc.includes(x), 'arbitrage : ' + x)
+  assert.ok(byLabel(calls, 'T00 · worker')[0].prompt.includes("Tester la règle d (arbitré par l'utilisateur)"))
+  assert.deepEqual(res.arbitrages_appliques, [{ tache: 'T02', titre: 'Contrat', option: 'B' }]); assert.equal(res.statut, 'terminé')
+  vide('J', q)
+})
+await cas('J2 : arbitrage refusé par plan-lint → arrêt, rien lu', async () => {
+  const { res, calls, q } = await scenario('J2', { 'arbitrage T02 · suivi': [{ ok: true, commit: 'x', refuses: [{ id: 'T01', raison: 'plan-lint : dépendance inconnue' }] }] }, { arbitrages: ARB })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.humain, true); assert.deepEqual(res.arbitrages_appliques, [{ tache: 'T02', titre: 'Contrat', option: 'B' }])
+  assert.equal(res.arbitrage.titre, 'Arbitrage « Contrat » appliqué en partie')
+  assert.equal(idx(calls, 'lecteur-plan'), -1)
+  vide('J2', q)
+})
+await cas('J3 : scribe sans réponse sur un arbitrage', async () => {
+  const { res, q } = await scenario('J3', { 'arbitrage T02 · suivi': [null] }, { arbitrages: ARB })
+  assert.equal(res.statut, 'arbitrage'); assert.deepEqual(res.arbitrages_appliques, []); assert.equal(res.arbitrage.titre, 'Arbitrage « Contrat » non appliqué')
+  vide('J3', q)
+})
+await cas('K : amendement refusé par le scribe en clôture → arrêt', async () => {
+  const { res, calls, q } = await scenario('K', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [RP_E], 'T00 · suivi': [{ ok: true, commit: 's', refuses: [{ id: 'T01', raison: 'plan-lint' }] }] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.ok(res.arbitrage.titre.includes('refusés')); assert.equal(idx(calls, 'T01 · worker'), -1)
+  vide('K', q)
+})
+await cas('K2 : scribe sans réponse → arrêt', async () => {
+  const { res, q } = await scenario('K2', { 'lecteur-plan': [plan(T00, T01)], ...t00(), 'T00 · suivi': [null] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.titre, 'Suivi de T00 non commité')
+  vide('K2', q)
+})
+await cas('L : deux options recommandées → arrêt sans décision', async () => {
+  const p2 = { titre: 'X', options: [{ id: 'A', description: 'a', recommande: true }, { id: 'B', description: 'b', recommande: true }] }
+  const { res, q } = await scenario('L', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [{ majeur: true, entrees: [], points: [p2] }], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.titre, 'X'); assert.ok(!res.arbitrage.coupe_circuit); assert.equal(res.decisions_office.length, 0)
+  vide('L', q)
+})
+await cas('L2 : aucune option recommandée → arrêt sans décision', async () => {
+  const p0 = { titre: 'Y', options: [{ id: 'A', description: 'a' }, { id: 'B', description: 'b' }] }
+  const { res, q } = await scenario('L2', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [{ majeur: true, entrees: [], points: [p0] }], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.titre, 'Y'); assert.equal(res.decisions_office.length, 0)
+  vide('L2', q)
+})
+await cas('M : amendements visant une tâche faite ou en cours → écartés et consignés', async () => {
+  const rp = { majeur: true, entrees: [], points: [{ titre: 'Z', options: [{ id: 'A', description: 'a', recommande: true, amendements: [{ id: 'T00', verification: ['x'], raison: 'r0' }, { id: 'T01', verification: ['y'], raison: 'r1' }] }] }] }
+  const { res, calls, q } = await scenario('M', { 'lecteur-plan': [plan({ ...T00, statut: 'fusionnée' }, T01)], 'T01 · worker': [rap(1, { branche: 'tache/T01', ecarts: ECART })], 'T01 · vérification': [ok(2)], 'T01 · évaluation': [{ verdict: 'ok' }], 'T01 · fusion': [FOK], 'T01 · replanification': [rp], 'T01 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'terminé'); assert.equal(res.decisions_office.length, 1)
+  assert.deepEqual(res.amendements_ecartes.map(a => [a.tache, a.id]), [['T01', 'T00'], ['T01', 'T01']])
+  const sc = byLabel(calls, 'T01 · suivi')[0].prompt
+  assert.ok(sc.includes('amendement non appliqué') && !sc.includes('Amendements, pour des tâches pas encore lancées'))
+  vide('M', q)
+})
+await cas('N : nouvelle dépendance vers une tâche ajoutée → tâche reportée au prochain run', async () => {
+  const rp = { majeur: true, entrees: [], points: [{ titre: 'Préalable', options: [{ id: 'A', description: 'ajouter T00D', recommande: true, taches_ajoutees: [{ id: 'T00D', titre: 'Préalable', phase: 1, contenu: '---\nid: T00D\nphase: 1\n---' }], amendements: [{ id: 'T01', depend_de: ['T00D'], raison: 'préalable' }] }] }] }
+  const { res, calls, q } = await scenario('N', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [rp], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'à-relancer'); assert.deepEqual(res.reportees, ['T01']); assert.deepEqual(res.non_lancees, []); assert.equal(idx(calls, 'T01 · worker'), -1)
+  vide('N', q)
+})
+await cas('O : replanificateur sans réponse → écarts notés majeurs, arrêt', async () => {
+  const { res, calls, q } = await scenario('O', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [null], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.titre, 'Replanification de T00 sans réponse')
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('(non classé : replanificateur sans réponse)') && sc.includes('"gravite":"majeur"'))
+  assert.deepEqual(res.non_lancees, ['T01'])
+  vide('O', q)
+})
+await cas('P : une tâche amendée attend que le suivi soit commité', async () => {
+  const A0 = { ...T00, ressources: [] }, B2 = { ...T00, id: 'T02', titre: 'Autre', fichier: 'plans/p/taches/T02.md', ressources: [], verification: ['pnpm test:t02'] }, C1 = { ...T01, ressources: [], depend_de: ['T02'] }
+  const e1 = deferred(), e2 = deferred(), ordre = []
+  const rp = { majeur: true, entrees: [], points: [{ titre: 'Course', options: [{ id: 'A', description: 'tester', recommande: true, amendements: [{ id: 'T01', verification: ['pnpm test:course'], raison: 'r' }] }] }] }
+  const { res, calls, q } = await scenario('P', {
+    'lecteur-plan': [plan(A0, B2, C1)],
+    'T00 · worker': [rap(0, { ecarts: ECART, chemin: '/wt/T00' })], 'T00 · vérification': [ok(1)], 'T00 · évaluation': [{ verdict: 'ok' }], 'T00 · fusion': [FOK],
+    'T02 · worker': [rap(2, { branche: 'tache/T02', chemin: '/wt/T02' })], 'T02 · vérification': [ok(2)], 'T02 · évaluation': [{ verdict: 'ok' }], 'T02 · fusion': [FOK],
+    'T02 · suivi': [async () => { e1.resolve(); await e2.promise; return SOK }],
+    'T00 · replanification': [async () => { await e1.promise; setTimeout(() => e2.resolve(), 0); return rp }],
+    'T00 · suivi': [async () => { await new Promise(r => setTimeout(r, 20)); ordre.push('fin T00 suivi'); return SOK }],
+    'T01 · worker': [() => { ordre.push('T01 worker'); return rap(1, { branche: 'tache/T01' }) }], 'T01 · vérification': [ok(3)], 'T01 · évaluation': [{ verdict: 'ok' }], 'T01 · fusion': [FOK], 'T01 · suivi': [SOK] }, { mode: 'auto' })
+  assert.deepEqual(ordre, ['fin T00 suivi', 'T01 worker'])
+  assert.ok(byLabel(calls, 'T01 · vérification')[0].prompt.includes('pnpm test:course'))
+  assert.equal(res.statut, 'terminé')
+  vide('P', q)
+})
+await cas('Q : tâche annulée comptée comme faite', async () => {
+  const { res, q } = await scenario('Q', { 'lecteur-plan': [plan({ ...T00, statut: 'annulée' }, T01)], ...t01() })
+  assert.equal(res.statut, 'terminé'); assert.deepEqual(res.taches.map(t => t.id), ['T01'])
+  vide('Q', q)
+})
+await cas('E2 : en phase 2, une tâche proposée en phase 1 est ramenée en phase 2', async () => {
+  const P2 = t => ({ ...t, phase: 2 })
+  const rp = { majeur: true, entrees: [], points: [{ titre: 'Rattrapage', options: [{ id: 'A', description: 'ajouter T00E', recommande: true, taches_ajoutees: [{ id: 'T00E', titre: 'Rattrapage', phase: 1, contenu: '---\nid: T00E\nphase: 1\n---' }] }] }] }
+  const { res, calls, q } = await scenario('E2', { 'lecteur-plan': [plan(P2(T00))], ...t00(ECART), 'T00 · replanification': [rp], 'T00 · suivi': [SOK] }, { mode: 'auto', phase: 2 })
+  assert.equal(res.statut, 'à-relancer'); assert.deepEqual(res.taches_ajoutees, [{ id: 'T00E', phase: 2, titre: 'Rattrapage' }])
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('phase: 2') && !sc.includes('phase: 1'), 'contenu : phase corrigée')
+  vide('E2', q)
+})
+
+// ——— v0.5 : garde-fous vus en réel ———
+await cas('S1 : écart sensible sans point → arrêt humain, entrée forcée en majeur', async () => {
+  const ec = [{ type: 'décision', description: 'le test tourne sur la base de dev mission_space' }]
+  const { res, calls, q } = await scenario('S1', { 'lecteur-plan': [plan(T00, T01)], ...t00(ec), 'T00 · replanification': [{ majeur: false, entrees: [{ type: 'décision', gravite: 'mineur', description: 'test sur la base de dev' }], points: [] }], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.equal(res.arbitrage.humain, true); assert.ok(res.arbitrage.titre.includes('Écart sensible'))
+  const rp = byLabel(calls, 'T00 · replanification')[0].prompt
+  assert.ok(rp.includes("majeurs d'office") && rp.includes('base de dev mission_space'), 'replan : écart sensible listé')
+  assert.ok(byLabel(calls, 'T00 · suivi')[0].prompt.includes('"gravite":"majeur","description":"test sur la base de dev"'), 'entrée forcée en majeur')
+  assert.equal(res.taches[0].statut, 'fusionnée')
+  vide('S1', q)
+})
+await cas('S1b : écart sensible avec un point, par phase → point à trancher, pas d\'arrêt', async () => {
+  const ec = [{ type: 'écart', description: 'restauration du dump prod à répéter' }]
+  const { res, calls, q } = await scenario('S1b', { 'lecteur-plan': [plan(T00, T01)], ...t00(ec), 'T00 · replanification': [RP_E], 'T00 · suivi': [SOK], ...t01() })
+  assert.equal(res.statut, 'terminé'); assert.equal(res.points_a_trancher.length, 1)
+  assert.ok(!byLabel(calls, 'T01 · replanification').length)
+  vide('S1b', q)
+})
+await cas('S1c : écart ordinaire → pas de liste d\'écarts sensibles', async () => {
+  const { calls, q } = await scenario('S1c', { 'lecteur-plan': [plan(T00)], ...t00(ECART), 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  assert.ok(!byLabel(calls, 'T00 · replanification')[0].prompt.includes("majeurs d'office"))
+  vide('S1c', q)
+})
+await cas("S2 : décision d'office qui cite une tâche inexistante → arrêt, rien appliqué", async () => {
+  const rp = { majeur: true, entrees: [], points: [{ titre: 'Code 1 accepté', options: [{ id: 'A', description: 'borner la décision ; T06B fournira le script', recommande: true, entrees: [{ type: 'décision', gravite: 'majeur', description: 'script livré par T06B' }] }, { id: 'B', description: 'autre' }] }] }
+  const { res, calls, q } = await scenario('S2', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [rp], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.ok((res.arbitrage.incoherence || '').includes('T06B')); assert.equal(res.decisions_office.length, 0)
+  assert.ok(!byLabel(calls, 'T00 · suivi')[0].prompt.includes("prise d'office"))
+  vide('S2', q)
+})
+await cas("S2b : tâche citée d'une autre phase, connue de plan-lint → appliquée, fichiers vérifiés par le scribe", async () => {
+  const rp = { majeur: true, entrees: [], points: [{ titre: 'Suite', options: [{ id: 'A', description: 'T07 relira docs/DEPLOY.md', recommande: true }] }] }
+  const pl = { ...plan(T00, T01), tous: [{ id: 'T00', phase: 1 }, { id: 'T01', phase: 1 }, { id: 'T07', phase: 2 }], phase_max: 2 }
+  const { res, calls, q } = await scenario('S2b', { 'lecteur-plan': [pl], ...t00(ECART), 'T00 · replanification': [rp], 'T00 · suivi': [SOK], ...t01() }, { mode: 'auto' })
+  assert.equal(res.decisions_office.length, 1); assert.equal(res.statut, 'terminé')
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('test -e') && sc.includes('T07 relira docs/DEPLOY.md'), "scribe : contrôle des fichiers cités par la décision d'office")
+  assert.ok(!byLabel(calls, 'T00 · replanification')[0].prompt.includes('Dernière phase'), 'pas la dernière phase')
+  vide('S2b', q)
+})
+await cas('S3 : tâche bloquée avec point humain → statut besoin-humain', async () => {
+  const { res, calls, q } = await scenario('S3', { 'lecteur-plan': [plan(T00, T01)], 'T00 · worker': [{ statut: 'blocked', resume: 'bloqué', branche: 'tache/T00', chemin: '/repo', blocage: 'restauration refusée' }], 'T00 · replanification': [{ majeur: true, entrees: [], points: [{ titre: 'Données réelles', humain: true, options: [] }] }], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.taches[0].statut, 'besoin-humain'); assert.equal(res.statut, 'arbitrage')
+  assert.ok(byLabel(calls, 'T00 · suivi')[0].prompt.includes('statut « besoin-humain »'))
+  vide('S3', q)
+})
+await cas('S3b : tâche besoin-humain non relancée sans décision', async () => {
+  const { res, calls, q } = await scenario('S3b', { 'lecteur-plan': [plan({ ...T00, statut: 'besoin-humain' }, T01)] })
+  assert.equal(res.statut, 'partiel'); assert.deepEqual(res.en_attente, ['T00']); assert.deepEqual(res.non_lancees, ['T01']); assert.equal(calls.length, 1)
+  vide('S3b', q)
+})
+await cas("S3c : relancée sur décision de l'utilisateur", async () => {
+  const { res, q } = await scenario('S3c', { 'lecteur-plan': [plan({ ...T00, statut: 'besoin-humain' }, T01)], ...t00(), 'T00 · suivi': [SOK], ...t01() }, { relancer: ['T00'] })
+  assert.equal(res.statut, 'terminé'); assert.deepEqual(res.en_attente, [])
+  vide('S3c', q)
+})
+await cas('S4 : dernière phase → consigne de convergence (tickets)', async () => {
+  const { calls, q } = await scenario('S4', { 'lecteur-plan': [{ ...plan(T00), tous: [{ id: 'T00', phase: 1 }], phase_max: 1 }], ...t00(ECART), 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const rp = byLabel(calls, 'T00 · replanification')[0].prompt
+  assert.ok(rp.includes('dernière phase du plan') && rp.includes('« ticket »'))
+  vide('S4', q)
+})
+await cas('S5 : données réelles (vérificateur) et véracité des textes (évaluateur)', async () => {
+  const { calls, q } = await scenario('S5', { 'lecteur-plan': [plan(T00)], ...t00(), 'T00 · suivi': [SOK] })
+  assert.ok(byLabel(calls, 'T00 · vérification')[0].prompt.includes('données réelles, geste réservé'))
+  assert.ok(byLabel(calls, 'T00 · évaluation')[0].prompt.includes('disent vrai'))
+  vide('S5', q)
+})
+await cas('S6 : qualité d\'abord — évaluateur et replanificateur sur opus, vérificateur et scribe sur sonnet', async () => {
+  const { calls, q } = await scenario('S6', { 'lecteur-plan': [plan(T00)], ...t00(ECART), 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const m = l => byLabel(calls, l)[0].opts.model
+  assert.equal(m('T00 · évaluation'), 'opus'); assert.equal(m('T00 · replanification'), 'opus')
+  assert.equal(m('T00 · vérification'), 'sonnet'); assert.equal(m('T00 · suivi'), 'sonnet'); assert.equal(m('lecteur-plan'), 'haiku')
+  vide('S6', q)
+})
+// ——— v0.6 : plugin (agents namespacés, plan-lint livré avec le plugin) ———
+const LP = '/Users/x/.claude/plugins/cache/circle/orchestre/0.6.0/scripts/plan-lint.mjs'
+await cas('P1 : plugin — agents « orchestre:* » par défaut, plan-lint du plugin passé par args (lecture et scribe)', async () => {
+  const { res, calls, q } = await scenario('P1', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [RP_E], 'T00 · suivi': [SOK], ...t01() }, { mode: 'auto', lint: LP })
+  assert.equal(res.statut, 'à-relancer')
+  const at = l => byLabel(calls, l)[0].opts.agentType
+  assert.equal(at('lecteur-plan'), 'orchestre:lecteur-plan'); assert.equal(at('T00 · worker'), 'orchestre:worker'); assert.equal(at('T00 · vérification'), 'orchestre:verificateur')
+  assert.equal(at('T00 · évaluation'), 'orchestre:evaluateur'); assert.equal(at('T00 · fusion'), 'orchestre:integrateur'); assert.equal(at('T00 · replanification'), 'orchestre:replanificateur'); assert.equal(at('T00 · suivi'), 'orchestre:scribe')
+  assert.ok(byLabel(calls, 'lecteur-plan')[0].prompt.includes(`node ${LP} plans/p --json --phase 1 --integration plan/p`), 'lecture : plan-lint du plugin')
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes(`node ${LP} plans/p --integration plan/p`) && !sc.includes('.claude/orchestre/'), 'scribe : plan-lint du plugin')
+  vide('P1', q)
+})
+await cas('P2 : installation manuelle — prefixe_agents vide, plan-lint par défaut', async () => {
+  const { calls, q } = await scenario('P2', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0)], 'T00 · vérification': [ok(1)], 'T00 · évaluation': [{ verdict: 'ok' }], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] }, { prefixe_agents: '', parallelisme: 1 })
+  assert.equal(byLabel(calls, 'lecteur-plan')[0].opts.agentType, 'lecteur-plan'); assert.equal(byLabel(calls, 'T00 · worker')[0].opts.agentType, 'worker')
+  assert.ok(byLabel(calls, 'lecteur-plan')[0].prompt.includes('node .claude/orchestre/plan-lint.mjs plans/p --json'))
+  vide('P2', q)
+})
+await cas('P3 : chemin de plan-lint avec espace → entre guillemets ; tâches parallèles → orchestre:worker-isole', async () => {
+  const L = '/Users/x y/.claude/plugins/cache/circle/orchestre/0.6.0/scripts/plan-lint.mjs'
+  const T02 = { ...T00, id: 'T02', titre: 'Autre', fichier: 'plans/p/taches/T02.md', ressources: [] }
+  const T03 = { ...T00, id: 'T03', titre: 'Encore', fichier: 'plans/p/taches/T03.md', ressources: [] }
+  const tt = id => ({ [`${id} · worker`]: [rap(id, { branche: `tache/${id}`, chemin: `/wt/${id}` })], [`${id} · vérification`]: [ok(id)], [`${id} · évaluation`]: [{ verdict: 'ok' }], [`${id} · fusion`]: [FOK], [`${id} · suivi`]: [SOK] })
+  const { res, calls, q } = await scenario('P3', { 'lecteur-plan': [plan(T02, T03)], ...tt('T02'), ...tt('T03') }, { lint: L })
+  assert.equal(res.statut, 'terminé')
+  assert.ok(byLabel(calls, 'lecteur-plan')[0].prompt.includes(`node "${L}" plans/p --json`))
+  assert.equal(byLabel(calls, 'T02 · worker')[0].opts.agentType, 'orchestre:worker-isole'); assert.equal(byLabel(calls, 'T02 · worker')[0].opts.isolation, 'worktree')
+  vide('P3', q)
+})
+// ——— v0.6 : corrections de la relecture ———
+await cas('Q1 : mode inconnu → erreur, aucun agent lancé', async () => {
+  const { res, calls } = await scenario('Q1', {}, { mode: 'deviation' })
+  assert.equal(res.statut, 'erreur'); assert.ok(res.detail.includes('auto, devia ou phase')); assert.equal(calls.length, 0)
+})
+await cas('Q2 : branche de base transmise à plan-lint (lecture et scribe)', async () => {
+  const { calls, q } = await scenario('Q2', { 'lecteur-plan': [plan(T00, T01)], ...t00(ECART), 'T00 · replanification': [RP_E], 'T00 · suivi': [SOK], ...t01() }, { mode: 'auto', base: 'develop' })
+  assert.ok(byLabel(calls, 'lecteur-plan')[0].prompt.includes('--integration plan/p --base develop'))
+  assert.ok(byLabel(calls, 'T00 · suivi')[0].prompt.includes('--integration plan/p --base develop'))
+  vide('Q2', q)
+})
+await cas("Q3 : arbitrage dont l'amendement vise une tâche fusionnée entre-temps → écarté, le run continue", async () => {
+  const { res, calls, q } = await scenario('Q3', { 'arbitrage T02 · suivi': [{ ok: true, commit: 'x', refuses: [], ecartes: [{ id: 'T01', raison: 'fusionnée' }] }], 'lecteur-plan': [plan(T00)], ...t00(), 'T00 · suivi': [SOK] }, { arbitrages: ARB })
+  assert.equal(res.statut, 'terminé'); assert.deepEqual(res.amendements_ecartes, [{ tache: 'T02', id: 'T01', raison: 'fusionnée' }])
+  const sc = byLabel(calls, 'arbitrage T02 · suivi')[0].prompt
+  assert.ok(sc.includes('rends-la dans « ecartes », pas dans « refuses »') && sc.includes('amendement non appliqué'))
+  assert.ok(byLabel(calls, 'arbitrage T02 · suivi')[0].opts.schema.properties.ecartes, 'scribe : schéma ecartes')
+  vide('Q3', q)
+})
+await cas("Q4 : autonome, amendement d'une tâche d'une autre phase déjà fusionnée → écarté, pas envoyé au scribe", async () => {
+  const rp = { majeur: true, entrees: [], points: [{ titre: 'W', options: [{ id: 'A', description: 'a', recommande: true, amendements: [{ id: 'T09', verification: ['z'], raison: 'r9' }] }] }] }
+  const T00b = { ...T00, phase: 2 }
+  const { res, calls, q } = await scenario('Q4', { 'lecteur-plan': [{ ...plan(T00b), tous: [{ id: 'T09', phase: 1, statut: 'fusionnée' }, { id: 'T00', phase: 2, statut: 'à-faire' }], phase_max: 2 }], ...t00(ECART), 'T00 · replanification': [rp], 'T00 · suivi': [SOK] }, { mode: 'auto', phase: 2 })
+  assert.equal(res.statut, 'terminé'); assert.deepEqual(res.amendements_ecartes.map(a => [a.tache, a.id]), [['T00', 'T09']])
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(!sc.includes('Amendements, pour des tâches pas encore lancées') && sc.includes('amendement non appliqué'))
+  vide('Q4', q)
+})
+await cas('Q5 : reprise de branche — règle unique, branche exacte rendue, dans le checkout principal comme en worktree', async () => {
+  const { calls, q } = await scenario('Q5', { 'lecteur-plan': [plan(T00)], ...t00(), 'T00 · suivi': [SOK] })
+  const w = byLabel(calls, 'T00 · worker')[0].prompt
+  for (const x of ['git switch -c tache/T00', 'for-each-ref', "refs/heads/tache/T00-r*", 'git worktree list', 'tache/T00-r<n>', 'rends son nom exact dans « branche »', 'checkout principal'])
+    assert.ok(w.includes(x), 'worker : ' + x)
+  assert.ok(!w.includes('Commite tout ton travail sur tache/T00.'), 'worker : plus de branche imposée')
+  vide('Q5', q)
+})
+await cas('Q6 : parallélisme de 1 → jamais de worktree, même entre tâches indépendantes', async () => {
+  const T02 = { ...T00, id: 'T02', fichier: 'plans/p/taches/T02.md', ressources: [] }, T03 = { ...T00, id: 'T03', fichier: 'plans/p/taches/T03.md', ressources: [] }
+  const tt = id => ({ [`${id} · worker`]: [rap(id, { branche: `tache/${id}` })], [`${id} · vérification`]: [ok(id)], [`${id} · évaluation`]: [{ verdict: 'ok' }], [`${id} · fusion`]: [FOK], [`${id} · suivi`]: [SOK] })
+  const { res, calls, q } = await scenario('Q6', { 'lecteur-plan': [plan(T02, T03)], ...tt('T02'), ...tt('T03') }, { parallelisme: 1 })
+  assert.equal(res.statut, 'terminé')
+  for (const id of ['T02', 'T03']) { const o = byLabel(calls, `${id} · worker`)[0].opts; assert.equal(o.agentType, 'orchestre:worker'); assert.equal(o.isolation, undefined) }
+  vide('Q6', q)
+})
+await cas("Q7 : exception pendant une tâche → échec avec la raison dans « blocage »", async () => {
+  const { res, q } = await scenario('Q7', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [() => { throw new Error('boom') }] })
+  assert.equal(res.statut, 'partiel'); const t = res.taches.find(x => x.id === 'T00')
+  assert.equal(t.statut, 'échec'); assert.deepEqual(t.blocage, ['erreur du workflow : Error: boom'])
+  vide('Q7', q)
+})
+console.log(`TOUT EST VERT (${n} cas)`)

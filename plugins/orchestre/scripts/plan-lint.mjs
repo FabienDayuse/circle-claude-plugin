@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+// plan-lint (plugin orchestre v0.6) : valide un dossier de plan et le compile en JSON. Node 18 ou plus, aucune dépendance.
+// Usage : node <racine du plugin>/scripts/plan-lint.mjs <dossier-plan> [--json] [--phase N] [--integration <branche>] [--base <branche>]
+// Avec --integration, une tâche dont le commit de fusion « tâche <id> : » est sur la branche d'intégration, et pas sur la branche de base
+// (--base, sinon main, sinon master), compte comme fusionnée : git fait foi. La base écarte les fusions des plans précédents déjà dans main.
+// Une tâche « annulée » dans SUIVI.md compte comme faite : elle ne bloque ni sa phase ni les tâches qui en dépendent.
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+
+const argv = process.argv.slice(2)
+const dir = argv.find((a, i) => !a.startsWith('--') && !['--phase', '--integration', '--base'].includes(argv[i - 1]))
+const ii = argv.indexOf('--integration')
+const integ = ii >= 0 ? argv[ii + 1] : null
+const bi = argv.indexOf('--base')
+const baseArg = bi >= 0 ? argv[bi + 1] : null
+const asJson = argv.includes('--json')
+const pi = argv.indexOf('--phase')
+const phaseF = pi >= 0 ? Number(argv[pi + 1]) : null
+if (!dir) { console.error('usage : plan-lint <dossier-plan> [--json] [--phase N] [--integration <branche>] [--base <branche>]'); process.exit(2) }
+// Un nom de branche ne commence jamais par « - » : sinon git le lirait comme une option (--output=… écrirait un fichier)
+for (const [nom, b] of [["d'intégration", integ], ['de base', baseArg]]) if (b != null && (!b || b.startsWith('-'))) { console.error(`branche ${nom} invalide : ${b}`); process.exit(2) }
+if (!existsSync(join(dir, 'taches'))) { console.error(`dossier de tâches introuvable : ${join(dir, 'taches')}`); process.exit(2) }
+
+const arr = x => (Array.isArray(x) ? x : x ? [x] : [])
+const fait = s => s === 'fusionnée' || s === 'annulée'
+function unquote(v) {
+  v = v.trim()
+  if (v.startsWith('"')) { const m = v.match(/^"((?:[^"\\]|\\.)*)"/); return m ? m[1].replace(/\\(["\\])/g, '$1') : v }
+  if (v.startsWith("'")) { const m = v.match(/^'((?:[^']|'')*)'/); return m ? m[1].replace(/''/g, "'") : v }
+  return v.replace(/\s+#.*$/, '').trim()
+}
+// Liste courte [a, "b, c"] : les virgules entre guillemets ne séparent pas les éléments
+function inlineList(v) {
+  const s = v.trim()
+  if (!s.startsWith('[')) return null
+  const out = []
+  let cur = '', q = null
+  for (let i = 1; i < s.length; i++) {
+    const c = s[i]
+    if (q) {
+      cur += c
+      if (q === '"' && c === '\\') { cur += s[++i] ?? ''; continue }
+      if (c === q) { if (q === "'" && s[i + 1] === "'") { cur += s[++i]; continue } q = null }
+    } else if (c === '"' || c === "'") { q = c; cur += c }
+    else if (c === ',' || c === ']') { if (cur.trim()) out.push(unquote(cur)); cur = ''; if (c === ']') return out }
+    else cur += c
+  }
+  return null
+}
+function frontmatter(text) {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  if (!m) return null
+  const out = {}
+  let key = null
+  for (const line of m[1].split(/\r?\n/)) {
+    const item = line.match(/^\s+-\s+(.*)$/)
+    if (item && key) { if (!Array.isArray(out[key])) out[key] = []; out[key].push(unquote(item[1])); continue }
+    const kv = line.match(/^([a-z_]+):\s*(.*)$/)
+    if (kv) { key = kv[1]; const l = inlineList(kv[2]); out[key] = l !== null ? l : kv[2].trim() === '' ? [] : unquote(kv[2]) }
+  }
+  return out
+}
+function statuts() {
+  const p = join(dir, 'SUIVI.md'), map = {}
+  if (!existsSync(p)) return map
+  let cols = null
+  for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
+    if (!line.trim().startsWith('|')) continue
+    const cells = line.split('|').slice(1, -1).map(c => c.trim())
+    if (!cols && cells.includes('ID') && cells.includes('Statut')) { cols = { id: cells.indexOf('ID'), st: cells.indexOf('Statut') }; continue }
+    if (cols && /^[A-Z]+\d+[A-Z]*$/.test(cells[cols.id] || '')) map[cells[cols.id]] = cells[cols.st]
+  }
+  return map
+}
+const tokens = s => { const m = String(s || '').match(/([\d.,]+)\s*M/i); return m ? Number(m[1].replace(',', '.')) : 0 }
+
+const erreurs = [], T = new Map(), tdir = join(dir, 'taches')
+for (const f of readdirSync(tdir).filter(f => f.endsWith('.md')).sort()) {
+  const fm = frontmatter(readFileSync(join(tdir, f), 'utf8'))
+  if (!fm || !fm.id) { erreurs.push(`${f} : frontmatter absent ou sans id`); continue }
+  if (T.has(fm.id)) erreurs.push(`${fm.id} : identifiant en double`)
+  T.set(fm.id, { ...fm, fichier: join(tdir, f), phase: Number(fm.phase) })
+}
+const st = statuts()
+const git = args => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+const existe = b => { try { git(['rev-parse', '--verify', '--quiet', `refs/heads/${b}`]); return true } catch { return false } }
+if (integ) {
+  const base = baseArg || ['main', 'master'].find(existe)
+  if (baseArg && !existe(baseArg)) erreurs.push(`branche de base introuvable : ${baseArg}`)
+  try {
+    const log = git(['log', '--format=%s', base && base !== integ ? `${base}..${integ}` : integ, '--'])
+    for (const m of log.matchAll(/^tâche (\S+) :/gm)) st[m[1]] = 'fusionnée'
+  } catch { erreurs.push(`branche d'intégration introuvable : ${integ}`) }
+}
+for (const t of T.values()) {
+  if (!t.phase) erreurs.push(`${t.id} : phase manquante`)
+  if (!t.modele) erreurs.push(`${t.id} : modèle manquant`)
+  if (!arr(t.verification).length) erreurs.push(`${t.id} : aucune commande de vérification`)
+  if (!arr(t.definition_du_fini).length) erreurs.push(`${t.id} : définition du fini absente`)
+  for (const d of arr(t.depend_de)) {
+    if (!T.has(d)) erreurs.push(`${t.id} : dépendance inconnue ${d}`)
+    else if (T.get(d).phase > t.phase) erreurs.push(`${t.id} : dépend de ${d}, d'une phase ultérieure`)
+  }
+}
+const anc = (id, seen = new Set()) => { for (const d of arr(T.get(id)?.depend_de)) if (T.has(d) && !seen.has(d)) { seen.add(d); anc(d, seen) } return seen }
+for (const id of T.keys()) if (anc(id).has(id)) erreurs.push(`${id} : cycle de dépendances`)
+const racine = p => p.split('#')[0].trim().replace(/\*.*$/, '')
+const chevauche = (a, b) => arr(a).some(x => arr(b).some(y => { const p = racine(x), q = racine(y); return p === q || p.startsWith(q) || q.startsWith(p) }))
+const ids = [...T.keys()]
+for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+  const a = T.get(ids[i]), b = T.get(ids[j])
+  if (a.phase !== b.phase || anc(a.id).has(b.id) || anc(b.id).has(a.id)) continue
+  if (arr(a.ressources).some(r => arr(b.ressources).includes(r))) continue
+  if (chevauche(a.fichiers_possedes, b.fichiers_possedes)) erreurs.push(`${a.id} et ${b.id} peuvent tourner ensemble et partagent des fichiers`)
+}
+if (phaseF != null) for (const t of T.values()) if (t.phase < phaseF && !fait(st[t.id] || 'à-faire')) erreurs.push(`${t.id} (phase ${t.phase}) n'est ni fusionnée ni annulée : la phase ${phaseF} ne peut pas démarrer`)
+
+const taches = [...T.values()].filter(t => phaseF == null || t.phase === phaseF).map(t => ({
+  id: t.id, titre: t.titre || '', fichier: t.fichier, phase: t.phase, modele: t.modele, effort: t.effort || '',
+  depend_de: arr(t.depend_de), ressources: arr(t.ressources), statut: st[t.id] || 'à-faire',
+  verification: arr(t.verification), estimation_tokens: tokens(t.estimation_tokens),
+}))
+// Toutes les tâches, quelle que soit la phase demandée : l'orchestrateur vérifie les tâches citées par une décision d'office
+const tous = [...T.values()].map(t => ({ id: t.id, phase: t.phase, statut: st[t.id] || 'à-faire' }))
+const phase_max = Math.max(0, ...[...T.values()].map(t => t.phase || 0))
+if (asJson) console.log(JSON.stringify({ ok: erreurs.length === 0, erreurs, taches, tous, phase_max }, null, 2))
+else {
+  if (erreurs.length) console.log(erreurs.map(e => '✗ ' + e).join('\n'))
+  else {
+    const parPhase = {}
+    for (const t of taches) if (!fait(t.statut)) parPhase[t.phase] = (parPhase[t.phase] || 0) + t.estimation_tokens
+    const fmt = n => n.toFixed(1).replace('.', ',') + ' M'
+    console.log(`✓ plan valide : ${T.size} tâche${T.size > 1 ? 's' : ''}. Reste à faire, en tokens estimés : ` +
+      Object.entries(parPhase).map(([p, n]) => `phase ${p} ${fmt(n)}`).join(' · ') +
+      ` · total ${fmt(Object.values(parPhase).reduce((a, b) => a + b, 0))}`)
+  }
+}
+process.exit(erreurs.length ? 1 : 0)

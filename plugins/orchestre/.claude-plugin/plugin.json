@@ -1,0 +1,9 @@
+{
+  "name": "orchestre",
+  "displayName": "Orchestre",
+  "version": "0.6.0",
+  "description": "Exécute un plan de dev découpé en tâches (plans/<nom>), phase par phase, avec des subagents : réalisation, vérification, évaluation, corrections, fusion et suivi.",
+  "author": { "name": "Fabien Dauvergne" },
+  "repository": "https://github.com/FabienDayuse/circle-claude-plugin",
+  "keywords": ["orchestration", "workflow", "plan", "subagents", "worktree"]
+}

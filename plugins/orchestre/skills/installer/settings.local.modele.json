@@ -1,0 +1,30 @@
+{
+  "worktree": { "baseRef": "head" },
+  "autoContinueAtUsageLimit": true,
+  "permissions": {
+    "allow": [
+      "Workflow(orchestre:executer-phase)",
+      "Bash(git switch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git merge *)",
+      "Bash(git worktree *)",
+      "Bash(git branch *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git status *)",
+      "Bash(git rev-parse *)",
+      "Bash(git checkout HEAD -- *)",
+      "Bash(git -C * diff *)",
+      "Bash(git -C * log *)",
+      "Bash(date *)",
+      "Bash(test -e *)"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(git -C * push *)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}
