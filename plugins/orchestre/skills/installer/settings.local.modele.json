@@ -24,7 +24,11 @@
       "Bash(git push *)",
       "Bash(git -C * push *)",
       "Read(./.env)",
-      "Read(./.env.*)"
+      "Read(./.env.*)",
+      "Read(!.env.example)",
+      "Read(!.env.sample)",
+      "Read(!.env.template)",
+      "Read(!.env.dist)"
     ]
   }
 }

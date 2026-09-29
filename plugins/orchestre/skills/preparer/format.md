@@ -106,7 +106,7 @@ Types : décision · geste · environnement. Statuts : ouvert · fait · abandon
 Entrées : `écart`, `angle-mort`, `décision`, `dette`, `besoin-humain`, `ticket`, `relecture`, classées `mineur` ou `majeur`.
 ```
 
-Les entrées se rangent sous un titre `## <id de tâche>`, au format `type · gravité · description`. En cours de run, l'orchestrateur ajoute aussi les types `refus`, `amendement` et `blocage`. Une `relecture` porte sur un fichier que les agents n'ont pas le droit de lire ou d'écrire, par exemple un `.env.example` interdit par les réglages de l'organisation, ou sur une commande qu'ils n'ont pas le droit de lancer : l'humain la fait avant la PR, sans que le run s'arrête. `/orchestre:preparer` en écrit dès la planification, l'orchestrateur en cours de run.
+Les entrées se rangent sous un titre `## <id de tâche>`, au format `type · gravité · description`. En cours de run, l'orchestrateur ajoute aussi les types `refus`, `amendement` et `blocage`. Une `relecture` porte sur un fichier que les agents n'ont pas le droit de lire ou d'écrire (réglages du projet ou de l'organisation), ou sur une commande qu'ils n'ont pas le droit de lancer : l'humain la fait avant la PR, sans que le run s'arrête. `/orchestre:preparer` en écrit dès la planification, l'orchestrateur en cours de run.
 
 ## DISCOVERY.md
 
