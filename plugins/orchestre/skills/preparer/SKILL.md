@@ -1,6 +1,6 @@
 ---
 name: preparer
-description: Écrit un plan exécutable par /orchestre:lancer (dossier plans/<nom>/) — convertit un plan déjà écrit ou en rédige un nouveau à partir d'un objectif — puis le valide avec plan-lint. À utiliser quand l'utilisateur tape /orchestre:preparer ou demande de préparer, d'écrire ou de convertir un plan pour l'orchestrateur.
+description: Écrit un plan exécutable par /orchestre:lancer (dossier plans/<nom>/) — convertit un plan déjà écrit ou en rédige un nouveau à partir d'un objectif —, fait trancher toutes les décisions, inventorie ce qui doit être prêt (PREREQUIS.md), puis le valide avec plan-lint. À utiliser quand l'utilisateur tape /orchestre:preparer ou demande de préparer, d'écrire ou de convertir un plan pour l'orchestrateur.
 argument-hint: "<plan existant (fichier ou dossier) | objectif du plan>"
 allowed-tools:
   - Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs *)
@@ -41,22 +41,33 @@ Lis le plan source en entier. Garde son découpage, son vocabulaire et ses déci
 - `phase` et `depend_de` viennent de l'ordre et des liens du plan source. Ce qu'il ne dit pas, tire-le de l'exploration : `fichiers_possedes`, `ressources`, `verification` (commandes réelles, vérifiées à l'étape 1), `definition_du_fini` (critères démontrables par le diff ou par une commande), `modele` et `effort` selon la difficulté.
 - Le texte de la tâche source va dans « Détail de réalisation », ses exclusions dans « Hors périmètre ».
 - Les décisions déjà prises dans le plan source deviennent des entrées `décision · majeur · …` dans HANDOFF.md, sous un titre `## plan source`.
-- Ce qui manque et change le plan (choix produit, périmètre, accès, secret) : n'invente rien, pose la question (au plus 3, avec l'outil de question) ou garde-la dans les questions ouvertes du bilan.
+- Les décisions restées ouvertes dans le plan source, et tout ce qui manque (choix produit, périmètre, accès, secret) : n'invente rien, cela se règle à l'étape 3.
 
 ## 2b. Nouveau plan
 
-Si l'exploration fait apparaître des questions qui changent le plan, poses-en au plus 3 avec l'outil de question, puis attends. Sinon, enchaîne. Découpe selon les règles de `format.md`.
+Découpe selon les règles de `format.md`. Une question qui change le découpage lui-même se pose avant de découper, selon la règle de l'étape 3.
 
-## 3. Écrire
+## 3. Faire trancher, puis inventorier ce qui doit être prêt
 
-Écris `plans/<nom>/` : les tâches dans `taches/`, `SUIVI.md` (toutes les tâches à « à-faire »), `HANDOFF.md`, `DISCOVERY.md` amorcé avec l'étape 1, `orchestre.config.json` avec `branche_integration: "plan/<nom>"` et la branche de base dans `branche_base`. Termine le plan par une tâche de revue globale sur opus, en lecture seule.
+Rien de ce qui peut se savoir avant le run ne doit se découvrir pendant.
 
-## 4. Valider
+1. **Décisions.** Liste toutes les décisions ouvertes : celles laissées en suspens par le plan source, et celles que l'exploration fait apparaître (choix produit, périmètre, contrat, technologie, sécurité, données). Pose-les toutes, sans plafond, avec l'outil de question : par lots de 4 questions au plus, une question par décision. Chaque question a 4 options au plus : 3 choix au plus, le recommandé en premier avec son impact, puis « Reporter ». L'outil ajoute de lui-même « Autre », pour une réponse libre.
+   - Une décision tranchée devient une entrée `décision · majeur · <ID> : … (tranchée par l'utilisateur)` sous `## plan source` dans HANDOFF.md. Garde l'identifiant du plan source (D5), sinon numérote D1, D2… Si elle change une tâche, écris la tâche en conséquence.
+   - Une décision reportée devient une ligne `décision`, statut `ouvert`, de PREREQUIS.md ; les tâches qu'elle touche la citent dans `prerequis` et l'attendront.
+2. **Gestes humains.** Tout ce qu'un agent ne fera jamais : un accès (dépôt, service, cloud), un secret ou une clé d'API, un compte ou des crédits payants, des données réelles (dump, copie de prod), un déploiement, une validation par un tiers. Une ligne `geste` par besoin, avec la preuve attendue. Demande à l'utilisateur ceux qui sont déjà faits ; ne lis jamais un secret pour le vérifier.
+3. **Environnement.** Les services, outils et données de test dont les vérifications ont besoin (base de test, conteneur, binaire, jeu de données) : une ligne `environnement`, avec une commande sûre comme preuve quand il y en a une.
+4. Chaque tâche cite dans `prerequis` les identifiants dont elle a besoin, et seulement ceux-là.
+
+## 4. Écrire
+
+Écris `plans/<nom>/` : les tâches dans `taches/`, `SUIVI.md` (toutes les tâches à « à-faire »), `HANDOFF.md`, `PREREQUIS.md` (tableau vide si le plan n'attend rien), `DISCOVERY.md` amorcé avec l'étape 1, `orchestre.config.json` avec `branche_integration: "plan/<nom>"` et la branche de base dans `branche_base`. Termine le plan par une tâche de revue globale sur opus, en lecture seule.
+
+## 5. Valider
 
 1. `node ${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs plans/<nom>` : corrige jusqu'à « plan valide ».
-2. Relecture critique par un subagent sceptique : dépendances manquantes, tâches trop grosses ou trop petites, fini flou ou indémontrable, lots parallèles qui se marchent dessus (fichiers ou ressources), ressources oubliées, vérification qui toucherait des données réelles ou une base partagée. Corrige, puis relance plan-lint.
+2. Relecture critique par un subagent sceptique : dépendances manquantes, tâches trop grosses ou trop petites, fini flou ou indémontrable, lots parallèles qui se marchent dessus (fichiers ou ressources), ressources oubliées, vérification qui toucherait des données réelles ou une base partagée, et surtout ce qu'un agent ne pourra pas faire seul sans que PREREQUIS.md le dise (accès, secret, décision, service). Corrige, puis relance plan-lint.
 3. Avec l'accord de l'utilisateur : crée la branche `plan/<nom>` depuis la branche de base et commite uniquement `plans/<nom>/`, avec le message `plan(<nom>) : plan initial`. Relance plan-lint avec `--integration plan/<nom>` (et `--base <branche>` si la base n'est pas `main`).
 
-## 5. Bilan
+## 6. Bilan
 
-Rends le tableau de SUIVI.md, la ligne d'estimation de plan-lint et les questions restées ouvertes. Pour une conversion, ajoute la table de correspondance (tâche ou section du plan source → tâche orchestre) et ce qui a été découpé, fusionné ou ajouté (revue globale comprise). Suite : `/orchestre:installer` si le dépôt n'est pas encore préparé, puis, dans une session neuve, `/orchestre:lancer plans/<nom>`, avec un premier run en mode « arrêt par phase ».
+Rends le tableau de SUIVI.md, puis la ligne d'estimation et le bloc « Prêt à lancer » de plan-lint. Liste ensuite les prérequis ouverts : ce qu'il reste à faire avant de lancer, avec la première phase que chacun bloque. Pour une conversion, ajoute la table de correspondance (tâche ou section du plan source → tâche orchestre) et ce qui a été découpé, fusionné ou ajouté (revue globale comprise). Suite : `/orchestre:installer` si le dépôt n'est pas encore préparé, `/orchestre:pret plans/<nom>` la veille du lancement, puis, dans une session neuve, `/orchestre:lancer plans/<nom>`, avec un premier run en mode « arrêt par phase ».

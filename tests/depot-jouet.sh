@@ -76,6 +76,12 @@ Crée src/bonjour.sh (`#!/bin/sh`, puis `echo bonjour`), rends-le exécutable (`
 ## Hors périmètre
 Tout le reste du dépôt.
 FIN_T01_BONJOUR_MD
+cat > 'plans/demo/PREREQUIS.md' <<'FIN_PREREQUIS_MD'
+# PREREQUIS — demo
+
+| ID | Type | Prérequis | Statut | Preuve |
+|----|------|-----------|--------|--------|
+FIN_PREREQUIS_MD
 git add -A
 git config user.name >/dev/null 2>&1 || git config user.name "orchestre"
 git config user.email >/dev/null 2>&1 || git config user.email "orchestre@localhost"

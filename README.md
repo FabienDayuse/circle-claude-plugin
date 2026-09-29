@@ -4,7 +4,7 @@ Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plu
 
 | Plugin | Version | Rôle |
 | :- | :- | :- |
-| `orchestre` | 0.6.0 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
+| `orchestre` | 0.6.1 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
@@ -33,11 +33,11 @@ claude plugin marketplace add FabienDayuse/circle-claude-plugin
 claude plugin install orchestre@circle
 ```
 
-Vérifier : `claude plugin list` affiche `orchestre@circle` activé, et `/orchestre:` propose `installer`, `preparer` et `lancer`.
+Vérifier : `claude plugin list` affiche `orchestre@circle` activé, et `/orchestre:` propose `installer`, `preparer`, `pret` et `lancer`.
 
 ## Utiliser
 
-Trois commandes, dans l'ordre :
+Quatre commandes, dans l'ordre :
 
 ### 1. `/orchestre:installer` : préparer le dépôt
 
@@ -52,16 +52,26 @@ Le pilote a tourné en mode de permission auto. En mode manuel, toute commande n
 
 ### 2. `/orchestre:preparer` : écrire ou convertir un plan
 
-- `/orchestre:preparer docs/mon-plan.md` : convertit un plan déjà écrit (fichier ou dossier). Découpage, vocabulaire et décisions du plan source sont conservés ; ce qui manque (fichiers possédés, commandes de vérification, définition du fini) vient d'une exploration du dépôt, et les vraies questions sont posées plutôt qu'inventées. Le bilan donne une table de correspondance plan source → tâches.
-- `/orchestre:preparer ajouter l'export CSV des réservations` : explore le dépôt, pose au plus 3 questions, découpe et écrit un nouveau plan.
+- `/orchestre:preparer docs/mon-plan.md` : convertit un plan déjà écrit (fichier ou dossier). Découpage, vocabulaire et décisions du plan source sont conservés ; ce qui manque (fichiers possédés, commandes de vérification, définition du fini) vient d'une exploration du dépôt. Le bilan donne une table de correspondance plan source → tâches.
+- `/orchestre:preparer ajouter l'export CSV des réservations` : explore le dépôt, découpe et écrit un nouveau plan.
 
-Dans les deux cas, le plan est validé par plan-lint, relu par un subagent sceptique, puis commité sur la branche `plan/<nom>` après accord. Le format est décrit dans [`plugins/orchestre/skills/preparer/format.md`](plugins/orchestre/skills/preparer/format.md).
+Dans les deux cas, toutes les décisions ouvertes te sont posées, par lots de 4, sans plafond ; seules celles que tu choisis de reporter restent ouvertes. Ce qu'un agent ne fera jamais (accès, secret, compte payant, données réelles) et l'environnement dont les vérifications ont besoin vont dans `PREREQUIS.md`, et chaque tâche cite ce qu'elle attend. Le plan est validé par plan-lint, relu par un subagent sceptique, puis commité sur la branche `plan/<nom>` après accord. Le format est décrit dans [`plugins/orchestre/skills/preparer/format.md`](plugins/orchestre/skills/preparer/format.md).
 
-### 3. `/orchestre:lancer plans/<nom>` : exécuter
+### 3. `/orchestre:pret plans/<nom>` : vérifier que tout est prêt
 
-Dans une session neuve. Pré-vol (version, réglages, git, plan-lint, formateur), choix du mode et du nombre de tâches simultanées, puis un run du workflow par phase :
+La veille du lancement, sans exécuter aucune tâche :
 
-- **arrêt par phase** : résumé et points à trancher après chaque phase (conseillé pour un premier plan) ;
+- l'environnement : réglages, outils, git, formateur, dossiers non suivis, autorisations des commandes de vérification ;
+- les prérequis : les décisions encore ouvertes, à trancher sur-le-champ, et les gestes qui te reviennent, avec la marche à suivre. Pour un plan écrit avant la 0.6.1, la commande construit d'abord `PREREQUIS.md` ;
+- une répétition à blanc des commandes de vérification sûres (sans base partagée, données réelles, appel payant ni déploiement), qui révèle les outils ou autorisations manquants et les échecs déjà présents.
+
+Elle rend un verdict par phase, par exemple « phases 1 à 3 prêtes ; phase 4 : T12 attend D5 ». Pendant le run, une tâche dont un prérequis reste ouvert ne part pas, et le reste de la phase tourne. `--sans-repetition` saute la répétition.
+
+### 4. `/orchestre:lancer plans/<nom>` : exécuter
+
+Dans une session neuve. Pré-vol (version, réglages, git, plan-lint et prérequis de la phase, formateur), choix du mode et du nombre de tâches simultanées, puis un run du workflow par phase :
+
+- **arrêt par phase** : points à trancher, puis résumé de la phase dans la question « on continue ? » (conseillé pour un premier plan) ;
 - **arrêt sur déviation** : le run s'arrête sur tout écart majeur pour un arbitrage ;
 - **autonome** : l'option la plus prudente de chaque point majeur est prise d'office ; tout point humain arrête le run, et le run s'arrête aussi au-delà de 3 décisions d'office.
 
@@ -77,7 +87,7 @@ sh tests/depot-jouet.sh ~/tmp/orchestre-jouet
 cd ~/tmp/orchestre-jouet && claude
 ```
 
-Puis `/orchestre:installer`, une session neuve, et `/orchestre:lancer plans/demo`.
+Puis `/orchestre:installer`, une session neuve, `/orchestre:pret plans/demo` et `/orchestre:lancer plans/demo`.
 
 ## Mettre à jour
 
@@ -88,8 +98,11 @@ Entre deux runs, jamais pendant :
 /reload-plugins
 ```
 
+Ou depuis un terminal : `claude plugin update orchestre@circle`, puis une session neuve.
+
+- Une mise à jour n'arrive que si la version de `plugins/orchestre/.claude-plugin/plugin.json` a changé : sinon, la commande répond que le plugin est déjà à jour.
 - Mise à jour automatique : `/plugin` → *Marketplaces* → `circle` → *Enable auto-update*. Pour un dépôt privé, elle a besoin d'un identifiant git déjà enregistré (clé SSH dans `ssh-agent`, ou `gh auth setup-git`) ; sinon elle échoue sans bruit et garde la version en place.
-- Le chemin de plan-lint contient le numéro de version : après une mise à jour, `/orchestre:lancer` remplace de lui-même la règle d'autorisation correspondante.
+- Le chemin de plan-lint contient le numéro de version : après une mise à jour, `/orchestre:lancer` propose de remplacer la règle d'autorisation correspondante.
 - Version installée : `claude plugin list`.
 
 ## Partager avec l'équipe d'un dépôt
@@ -108,7 +121,7 @@ Les plans en cours (`plans/<nom>/`, SUIVI, HANDOFF, branche d'intégration) ne c
 
 ## Ce que fait un run
 
-Un run égale une phase. Pour chaque tâche prête (dépendances fusionnées, ressources libres) :
+Un run égale une phase. Pour chaque tâche prête (dépendances fusionnées, prérequis faits, ressources libres) :
 
 | Étape | Agent | Modèle | Rôle |
 | :- | :- | :- | :- |
@@ -131,6 +144,7 @@ plugins/orchestre/
 ├── .claude-plugin/plugin.json       manifeste (nom, version)
 ├── skills/installer/                /orchestre:installer, modèle de réglages
 ├── skills/preparer/                 /orchestre:preparer, format d'un plan
+├── skills/pret/                     /orchestre:pret
 ├── skills/lancer/                   /orchestre:lancer
 ├── agents/                          les 8 agents du workflow
 ├── workflows/executer-phase.js      le workflow, un run par phase
@@ -144,7 +158,7 @@ tests/
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 47 scénarios du workflow, avec des agents simulés, rien n'est lancé pour de vrai ; 9 cas de plan-lint dans un dépôt git temporaire.
+- Tests : `npm test` : 52 scénarios du workflow, avec des agents simulés, rien n'est lancé pour de vrai ; 13 cas de plan-lint dans un dépôt git temporaire.
 - Validation : `npm run validate` (`claude plugin validate` sur le plugin et sur la marketplace).
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
 - Publier une version :
@@ -156,7 +170,8 @@ tests/
 
 ## Limites connues
 
-- La v0.6 reprend la logique de la v0.5, corrigée après relecture ; ni l'une ni l'autre n'a encore été jouée en réel. L'empaquetage est vérifié (validation, installation depuis la marketplace, workflow de plugin appelé par son nom, agents du plugin résolus depuis le workflow, chemins du plugin substitués dans les skills et les agents), pas encore un run complet sous forme de plugin : le dépôt jouet sert à ça.
+- Le plugin a tourné en réel pour la première fois le 29/09, sur un plan de 37 tâches : la phase 1 est passée (une tâche, fusionnée en 2 essais). Les prérequis et `/orchestre:pret` (0.6.1) n'ont pas encore tourné en réel.
+- `/orchestre:pret` repère les commandes « sûres » sur la foi de la configuration et de DISCOVERY.md : dans le doute, il demande de les lancer soi-même avec `!`.
 - Les réglages (worktree, reprise sur limite d'usage, permissions) ne peuvent pas venir d'un plugin : `/orchestre:installer` les écrit dans chaque projet.
 - Les tokens réels ne sont pas relevés automatiquement : lecture dans `/workflows`, tâche par tâche. Sur le pilote, le réel a été de 3 à 8 fois l'estimation.
 - En mode autonome, les décisions d'office ne sont relues qu'à la PR ; le coupe-circuit borne leur nombre, pas leur qualité.

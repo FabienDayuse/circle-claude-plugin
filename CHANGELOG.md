@@ -2,6 +2,20 @@
 
 Chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases), sauf la 0.6, qui change l'empaquetage.
 
+## 0.6.1 — 29/09/2026 : prêt à lancer
+
+Tout ce qu'un humain doit décider ou faire est repéré à la planification, écrit dans le plan et contrôlé par plan-lint avant chaque phase. Au premier run réel (mr-review-recall), quatre décisions ouvertes du plan source n'avaient été posées ni à la conversion ni au lancement.
+
+- `PREREQUIS.md` dans le plan : une ligne par prérequis (décision, geste humain ou environnement), avec son statut (`ouvert`, `fait`, `abandonné`) et sa preuve. Chaque tâche cite les siens dans `prerequis:`.
+- plan-lint : refuse un prérequis inconnu, en double, pris par une tâche, de type ou de statut inconnu ; une décision au statut `fait` qu'aucune entrée de HANDOFF.md commençant par `décision ·` ne cite ; une décision ouverte qu'aucune tâche restante ne cite ; un PREREQUIS.md sans tableau reconnu ou avec une ligne ignorée. Il signale un geste ou un environnement ouvert que rien ne cite, et compte une tâche « besoin-humain » comme en attente. Le JSON donne `prerequis_ouverts` par tâche, `prerequis` (avec les tâches bloquées) et `pret` par phase. La sortie texte affiche un bloc « Prêt à lancer ». Un `\|` est permis dans une cellule de tableau.
+- Workflow : une tâche dont un prérequis est ouvert ne part pas, même relancée ; les tâches de sa phase qui en dépendent attendent avec elle, et le reste tourne. Nouveau champ de rapport : `en_attente_prerequis`.
+- `/orchestre:preparer` : le plafond de 3 questions disparaît. Il pose toutes les décisions ouvertes, par lots de 4, avec une option « Reporter », inventorie gestes et environnement dans PREREQUIS.md, et conclut phase par phase si le plan est prêt à lancer.
+- Nouvelle commande `/orchestre:pret` : environnement, prérequis (décisions tranchées sur-le-champ, gestes à faire), répétition à blanc des vérifications sûres, verdict par phase. Pour un plan écrit avant la 0.6.1, elle construit d'abord PREREQUIS.md.
+- `/orchestre:lancer` : contrôle des prérequis au pré-vol et avant chaque phase, preuve des prérequis d'environnement rejouée ; en arrêt par phase, le résumé de la phase va dans le texte même de la question de fin de phase, si bien que le pilote ne peut plus le sauter. Une phase `partiel` avec des tâches ajoutées ou reportées est relancée d'elle-même.
+- Le replanificateur lit PREREQUIS.md : un point sur un prérequis ouvert est humain, et une tâche ajoutée cite ses prérequis. Le lecteur du plan doit rendre `prerequis_ouverts` pour chaque tâche.
+- Répétition à blanc : un échec n'est classé « déjà présent » que si aucune tâche n'est fusionnée ou s'il se reproduit sur la branche de base ; l'état git est comparé avant et après.
+- Tests : 52 scénarios (5 nouveaux), 13 cas plan-lint (4 nouveaux), 13 mutations détectées, une par garde-fou nouveau.
+
 ## 0.6.0 — 29/09/2026 : plugin
 
 L'orchestrateur devient un plugin installable depuis la marketplace `circle`, au lieu d'une copie dans le `.claude/` de chaque projet. La logique d'orchestration est celle de la v0.5, avec les corrections listées plus bas.

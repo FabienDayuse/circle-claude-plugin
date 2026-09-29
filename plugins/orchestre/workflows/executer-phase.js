@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Lecture du plan' }, { title: 'Tâches' }, { title: 'Clôture' }],
 }
 
-// Orchestrateur v0.6 (plugin orchestre)
+// Orchestrateur v0.6.1 (plugin orchestre)
 // args : { plan, phase, mode: 'auto'|'devia'|'phase', parallelisme, integration, base, decisions, corrections_max, escalade, decisions_office_max, arbitrages, relancer, lint, prefixe_agents }
 // base : branche d'où part la branche d'intégration (main par défaut, lu par plan-lint)
 // arbitrages : options choisies par l'utilisateur depuis le run précédent, [{ tache, titre, option }] ; le scribe les applique avant la lecture du plan
@@ -36,7 +36,7 @@ if (!['auto', 'devia', 'phase'].includes(MODE)) return { statut: 'erreur', detai
 // Schémas des rapports
 const S = (properties, required) => ({ type: 'object', properties, required })
 const str = { type: 'string' }, bool = { type: 'boolean' }, strs = { type: 'array', items: str }
-const PLAN_S = S({ ok: bool, erreurs: strs, taches: { type: 'array', items: S({ id: str, titre: str, fichier: str, phase: { type: 'integer' }, modele: str, effort: str, depend_de: strs, ressources: strs, statut: str, verification: strs }, ['id', 'fichier', 'depend_de', 'statut', 'verification']) }, tous: { type: 'array', items: S({ id: str, phase: { type: 'integer' }, statut: str }, ['id']) }, phase_max: { type: 'integer' } }, ['ok', 'taches'])
+const PLAN_S = S({ ok: bool, erreurs: strs, taches: { type: 'array', items: S({ id: str, titre: str, fichier: str, phase: { type: 'integer' }, modele: str, effort: str, depend_de: strs, ressources: strs, statut: str, verification: strs, prerequis_ouverts: strs }, ['id', 'fichier', 'depend_de', 'statut', 'verification', 'prerequis_ouverts']) }, tous: { type: 'array', items: S({ id: str, phase: { type: 'integer' }, statut: str }, ['id']) }, phase_max: { type: 'integer' } }, ['ok', 'taches'])
 const RAPPORT_S = S({
   statut: { type: 'string', enum: ['done', 'partial', 'blocked'] }, resume: str, branche: str, commit: str, chemin: str, fichiers_modifies: strs,
   ecarts: { type: 'array', items: S({ type: { type: 'string', enum: ['écart', 'angle-mort', 'décision', 'dette', 'besoin-humain'] }, description: str, taches_impactees: strs }, ['type', 'description']) },
@@ -90,9 +90,9 @@ En cas de conflit : \`git merge --abort\`, puis rends ok=false, fusionne=false, 
 Sinon, rends fusionne=true, puis lance sur ${INTEG} cette commande de contrôle, sans pipe (ajoute \`; echo "code=$?"\`) : ${(t.verification || [])[0] || 'aucune'}. Rends controle_ok selon son code de sortie, un extrait utile dans detail en cas d'échec, et ok=true seulement si la fusion et le contrôle ont réussi.${isole ? `
 Supprime ensuite le worktree : \`git worktree unlock "${r.chemin}"\` (ignore l'erreur), puis \`git worktree remove --force "${r.chemin}"\`. Garde la branche.` : ''}`
 const pReplan = (t, r, statut, manques, nonVerif, sensibles = []) => `Replanification après ${t.id} (statut : ${statut}, phase ${PHASE}${DERNIERE ? ', dernière phase du plan' : ''}, mode ${MODE}). Tâche : ${t.fichier} ; son code est sur la branche ${r.branche}${statut === 'fusionnée' ? `, fusionnée dans ${INTEG} (checkout principal)` : `, dans ${r.chemin}`}. Écarts remontés : ${JSON.stringify(r.ecarts || [])}. Manques : ${JSON.stringify(manques)}. Critères non vérifiables dans le contexte de la tâche : ${JSON.stringify(nonVerif || [])}.${sensibles.length ? ` Écarts sensibles (données, base, prod, secret), majeurs d'office : rends un point pour chacun : ${JSON.stringify(sensibles)}.` : ''}
-Lis ${PLAN}/SUIVI.md, les décisions de ${PLAN}/HANDOFF.md et les tâches restantes de ${PLAN}/taches/. Classe chaque écart mineur ou majeur selon ta grille et rends une entrée par écart.
-Pour chaque écart majeur et chaque critère non vérifiable, rends un point dans « points » : titre, contexte, 2 ou 3 options dont une seule recommandée. Chaque option porte ses actions : entrées HANDOFF, tâches à ajouter (phase ${PHASE} ou plus, jamais une phase passée), amendements de tâches pas encore lancées, autres que ${t.id} (critères, fichiers possédés, commandes de vérification ou dépendances à ajouter, jamais rien à retirer). Pour une tâche déjà fusionnée, propose une tâche à ajouter plutôt qu'un amendement. Une option ne cite que des tâches et des fichiers qui existent déjà ou qu'elle crée elle-même. Aucune option ne fait lire, restaurer ou copier des données de production ou personnelles réelles par un agent : ce geste revient à l'humain. Recommande l'option la plus prudente pour la sécurité et les données : un test ou une garde de plus plutôt qu'un risque accepté.${MODE === 'auto' ? ` Mode autonome : l'option recommandée sera appliquée telle quelle, sans relecture humaine avant la PR.` : ''}${DERNIERE ? ` Dernière phase : ne propose une tâche que pour un point qui protège le déploiement, la sécurité ou les données ; pour les autres, une entrée de type « ticket » (à ouvrir après la PR), sans tâche.` : ''}
-Marque « humain » un point qu'aucun agent ne peut trancher (accès, secret, production, données réelles, choix produit), un écart de type besoin-humain, ou un problème d'environnement ou d'outillage dont la cause n'est pas démontrée par une sortie de commande citée ci-dessus. Ne modifie rien.`
+Lis ${PLAN}/SUIVI.md, les décisions de ${PLAN}/HANDOFF.md, ${PLAN}/PREREQUIS.md s'il existe, et les tâches restantes de ${PLAN}/taches/. Classe chaque écart mineur ou majeur selon ta grille et rends une entrée par écart.
+Pour chaque écart majeur et chaque critère non vérifiable, rends un point dans « points » : titre, contexte, 2 ou 3 options dont une seule recommandée. Chaque option porte ses actions : entrées HANDOFF, tâches à ajouter (phase ${PHASE} ou plus, jamais une phase passée ; une tâche ajoutée cite dans « prerequis » les prérequis de PREREQUIS.md dont elle a besoin), amendements de tâches pas encore lancées, autres que ${t.id} (critères, fichiers possédés, commandes de vérification ou dépendances à ajouter, jamais rien à retirer). Pour une tâche déjà fusionnée, propose une tâche à ajouter plutôt qu'un amendement. Une option ne cite que des tâches et des fichiers qui existent déjà ou qu'elle crée elle-même. Aucune option ne fait lire, restaurer ou copier des données de production ou personnelles réelles par un agent : ce geste revient à l'humain. Recommande l'option la plus prudente pour la sécurité et les données : un test ou une garde de plus plutôt qu'un risque accepté.${MODE === 'auto' ? ` Mode autonome : l'option recommandée sera appliquée telle quelle, sans relecture humaine avant la PR.` : ''}${DERNIERE ? ` Dernière phase : ne propose une tâche que pour un point qui protège le déploiement, la sécurité ou les données ; pour les autres, une entrée de type « ticket » (à ouvrir après la PR), sans tâche.` : ''}
+Marque « humain » un point qu'aucun agent ne peut trancher (accès, secret, production, données réelles, choix produit), un point qui porte sur un prérequis ouvert de PREREQUIS.md (décision reportée par l'utilisateur, geste humain), un écart de type besoin-humain, ou un problème d'environnement ou d'outillage dont la cause n'est pas démontrée par une sortie de commande citée ci-dessus. Ne modifie rien.`
 
 // Consignes communes au scribe : tâches créées, amendements, contrôle par plan-lint, compte rendu
 const pSuivi = (id, suivi) => `${suivi.taches.length ? `
@@ -275,9 +275,12 @@ async function executer(t, isole) {
 
 // Ordonnancement : dépendances, ressources, parallélisme
 phase('Tâches')
+// Une tâche dont un prérequis de PREREQUIS.md est ouvert attend, même relancée : le prérequis se règle d'abord dans le plan
+const attentePrerequis = plan.taches.filter(t => !FAIT(t.statut) && (t.prerequis_ouverts || []).length).map(t => ({ id: t.id, prerequis: t.prerequis_ouverts }))
+const attendPrerequis = id => attentePrerequis.some(a => a.id === id)
 // Une tâche « besoin-humain » ne repart que si l'utilisateur la relance (args.relancer)
-const enAttente = plan.taches.filter(t => t.statut === 'besoin-humain' && !RELANCER.has(t.id)).map(t => t.id)
-const restantes = new Map(plan.taches.filter(t => !FAIT(t.statut) && !enAttente.includes(t.id)).map(t => [t.id, t]))
+const enAttente = plan.taches.filter(t => t.statut === 'besoin-humain' && !RELANCER.has(t.id) && !attendPrerequis(t.id)).map(t => t.id)
+const restantes = new Map(plan.taches.filter(t => !FAIT(t.statut) && !enAttente.includes(t.id) && !attendPrerequis(t.id)).map(t => [t.id, t]))
 const enCours = new Map()
 const verrous = new Set()
 const pret = t => deps(t).every(d => faites.has(d)) && !amendees.has(t.id) && !(t.ressources || []).some(r => verrous.has(r)) && !verrous.has('checkout')
@@ -309,9 +312,9 @@ const ko = resultats.filter(r => r.statut !== 'fusionnée')
 const bilan = {
   phase: PHASE, mode: MODE, taches: resultats, non_lancees: [...restantes.keys()], reportees,
   taches_ajoutees: ajoutees.map(x => ({ id: x.id, phase: x.phase, titre: x.titre })),
-  decisions_office: office, amendements_ecartes: ecartesRun, points_a_trancher: points, arbitrages_appliques: appliques, en_attente: enAttente,
+  decisions_office: office, amendements_ecartes: ecartesRun, points_a_trancher: points, arbitrages_appliques: appliques, en_attente: enAttente, en_attente_prerequis: attentePrerequis,
 }
 if (arret) return { statut: 'arbitrage', arbitrage: arret, ...bilan }
-if (ko.length || restantes.size || enAttente.length) return { statut: 'partiel', ...bilan }
+if (ko.length || restantes.size || enAttente.length || attentePrerequis.length) return { statut: 'partiel', ...bilan }
 // Tâches initiales toutes fusionnées, mais des tâches ajoutées à cette phase ou reportées : relancer la phase
 return { statut: reportees.length || ajoutees.some(x => x.phase === PHASE) ? 'à-relancer' : 'terminé', ...bilan }

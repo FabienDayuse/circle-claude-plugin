@@ -438,4 +438,36 @@ await cas("Q7 : exception pendant une tâche → échec avec la raison dans « b
   assert.equal(t.statut, 'échec'); assert.deepEqual(t.blocage, ['erreur du workflow : Error: boom'])
   vide('Q7', q)
 })
+// ——— v0.6.1 : prérequis (PREREQUIS.md) ———
+await cas('R1 : prérequis ouvert → la tâche attend, celle qui en dépend aussi ; aucun agent lancé', async () => {
+  const { res, calls, q } = await scenario('R1', { 'lecteur-plan': [plan({ ...T00, prerequis_ouverts: ['D5'] }, T01)] })
+  assert.equal(res.statut, 'partiel'); assert.deepEqual(res.en_attente_prerequis, [{ id: 'T00', prerequis: ['D5'] }])
+  assert.deepEqual(res.non_lancees, ['T01']); assert.deepEqual(res.en_attente, []); assert.equal(calls.length, 1)
+  const ts = byLabel(calls, 'lecteur-plan')[0].opts.schema.properties.taches.items
+  assert.ok(ts.properties.prerequis_ouverts && ts.required.includes('prerequis_ouverts'), 'lecteur-plan : schéma, champ requis')
+  vide('R1', q)
+})
+await cas('R2 : le reste de la phase tourne pendant qu’une tâche attend son prérequis', async () => {
+  const T02 = { ...T00, id: 'T02', fichier: 'plans/p/taches/T02.md', ressources: [], prerequis_ouverts: ['H1'] }, T03 = { ...T00, id: 'T03', fichier: 'plans/p/taches/T03.md', ressources: [] }
+  const { res, q } = await scenario('R2', { 'lecteur-plan': [plan(T02, T03)], 'T03 · worker': [rap(3, { branche: 'tache/T03' })], 'T03 · vérification': [ok(3)], 'T03 · évaluation': [{ verdict: 'ok' }], 'T03 · fusion': [FOK], 'T03 · suivi': [SOK] })
+  assert.equal(res.statut, 'partiel'); assert.deepEqual(res.taches.map(t => [t.id, t.statut]), [['T03', 'fusionnée']])
+  assert.deepEqual(res.en_attente_prerequis, [{ id: 'T02', prerequis: ['H1'] }])
+  vide('R2', q)
+})
+await cas('R3 : une tâche « besoin-humain » relancée attend quand même son prérequis ouvert', async () => {
+  const { res, calls, q } = await scenario('R3', { 'lecteur-plan': [plan({ ...T00, statut: 'besoin-humain', prerequis_ouverts: ['D6'] })] }, { relancer: ['T00'] })
+  assert.equal(res.statut, 'partiel'); assert.deepEqual(res.en_attente, []); assert.deepEqual(res.en_attente_prerequis, [{ id: 'T00', prerequis: ['D6'] }]); assert.equal(calls.length, 1)
+  vide('R3', q)
+})
+await cas('R4 : prérequis faits (liste vide) → la tâche part normalement', async () => {
+  const { res, q } = await scenario('R4', { 'lecteur-plan': [plan({ ...T00, prerequis_ouverts: [] })], ...t00(), 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé'); assert.deepEqual(res.en_attente_prerequis, [])
+  vide('R4', q)
+})
+await cas('R5 : le replanificateur lit PREREQUIS.md ; un point sur un prérequis ouvert est humain ; une tâche ajoutée cite ses prérequis', async () => {
+  const { calls, q } = await scenario('R5', { 'lecteur-plan': [plan(T00)], ...t00(ECART), 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const rp = byLabel(calls, 'T00 · replanification')[0].prompt
+  for (const x of ['plans/p/PREREQUIS.md', 'un point qui porte sur un prérequis ouvert de PREREQUIS.md', 'cite dans « prerequis »']) assert.ok(rp.includes(x), 'replan : ' + x)
+  vide('R5', q)
+})
 console.log(`TOUT EST VERT (${n} cas)`)

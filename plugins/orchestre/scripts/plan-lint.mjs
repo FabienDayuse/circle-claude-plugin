@@ -4,6 +4,8 @@
 // Avec --integration, une tâche dont le commit de fusion « tâche <id> : » est sur la branche d'intégration, et pas sur la branche de base
 // (--base, sinon main, sinon master), compte comme fusionnée : git fait foi. La base écarte les fusions des plans précédents déjà dans main.
 // Une tâche « annulée » dans SUIVI.md compte comme faite : elle ne bloque ni sa phase ni les tâches qui en dépendent.
+// PREREQUIS.md (facultatif) : ce que le plan attend d'un humain ou de l'environnement. Une tâche cite les siens dans « prerequis » ;
+// tant que l'un d'eux est « ouvert », elle attend (prerequis_ouverts) et le reste de la phase peut tourner.
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -61,19 +63,47 @@ function frontmatter(text) {
   }
   return out
 }
+// Cellules d'une ligne de tableau Markdown ; « \\| » est un « | » dans une cellule
+const cellules = line => {
+  const l = line.trim(), p = l.split(/(?<!\\)\|/)
+  if (p.length && p[0].trim() === '') p.shift()
+  if (/(?<!\\)\|$/.test(l)) p.pop()
+  return p.map(c => c.trim().replace(/\\\|/g, '|'))
+}
 function statuts() {
   const p = join(dir, 'SUIVI.md'), map = {}
   if (!existsSync(p)) return map
   let cols = null
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
     if (!line.trim().startsWith('|')) continue
-    const cells = line.split('|').slice(1, -1).map(c => c.trim())
+    const cells = cellules(line)
     if (!cols && cells.includes('ID') && cells.includes('Statut')) { cols = { id: cells.indexOf('ID'), st: cells.indexOf('Statut') }; continue }
     if (cols && /^[A-Z]+\d+[A-Z]*$/.test(cells[cols.id] || '')) map[cells[cols.id]] = cells[cols.st]
   }
   return map
 }
 const tokens = s => { const m = String(s || '').match(/([\d.,]+)\s*M/i); return m ? Number(m[1].replace(',', '.')) : 0 }
+const norm = s => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+const TYPES = { decision: 'décision', geste: 'geste', environnement: 'environnement' }
+const STATUTS = { ouvert: 'ouvert', fait: 'fait', abandonne: 'abandonné' }
+function prerequis() {
+  const p = join(dir, 'PREREQUIS.md'), liste = []
+  if (!existsSync(p)) return null
+  let cols = null, lignes = 0
+  for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
+    if (!line.trim().startsWith('|')) continue
+    const cells = cellules(line)
+    const idx = k => cells.findIndex(x => norm(x) === norm(k))
+    if (!cols && idx('ID') >= 0 && idx('Statut') >= 0) { cols = Object.fromEntries(['ID', 'Type', 'Prérequis', 'Statut', 'Preuve'].map(k => [k, idx(k)])); continue }
+    const c = k => (cols && cols[k] >= 0 ? cells[cols[k]] || '' : '')
+    if (!cols || cells.every(x => /^:?-*:?$/.test(x))) continue
+    lignes++
+    if (/^[A-Z]+\d+[A-Z]*$/.test(c('ID'))) liste.push({ id: c('ID'), type: TYPES[norm(c('Type'))] || c('Type'), texte: c('Prérequis'), statut: STATUTS[norm(c('Statut'))] || c('Statut'), preuve: c('Preuve') })
+    else erreurs.push(`PREREQUIS.md : ligne ignorée, identifiant invalide « ${c('ID')} » (lettres majuscules puis chiffres, comme D5)`)
+  }
+  if (!cols) erreurs.push('PREREQUIS.md : aucun tableau reconnu (en-têtes ID, Type, Prérequis, Statut, Preuve)')
+  return liste
+}
 
 const erreurs = [], T = new Map(), tdir = join(dir, 'taches')
 for (const f of readdirSync(tdir).filter(f => f.endsWith('.md')).sort()) {
@@ -116,15 +146,51 @@ for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
 }
 if (phaseF != null) for (const t of T.values()) if (t.phase < phaseF && !fait(st[t.id] || 'à-faire')) erreurs.push(`${t.id} (phase ${t.phase}) n'est ni fusionnée ni annulée : la phase ${phaseF} ne peut pas démarrer`)
 
+// Prérequis : identifiants, types et statuts connus ; une décision « fait » est écrite dans HANDOFF.md, où les agents la lisent
+const P = prerequis(), PR = new Map()
+const handoff = existsSync(join(dir, 'HANDOFF.md')) ? readFileSync(join(dir, 'HANDOFF.md'), 'utf8').split(/\r?\n/) : []
+const cite = (l, id) => new RegExp(`(^|[^A-Za-z0-9])${id}([^A-Za-z0-9]|$)`).test(l)
+for (const x of P || []) {
+  if (PR.has(x.id)) erreurs.push(`prérequis ${x.id} : identifiant en double`)
+  if (T.has(x.id)) erreurs.push(`prérequis ${x.id} : identifiant déjà pris par une tâche`)
+  if (!Object.values(TYPES).includes(x.type)) erreurs.push(`prérequis ${x.id} : type inconnu « ${x.type} » (décision, geste ou environnement)`)
+  if (!Object.values(STATUTS).includes(x.statut)) erreurs.push(`prérequis ${x.id} : statut inconnu « ${x.statut} » (ouvert, fait ou abandonné)`)
+  if (x.type === 'décision' && x.statut === 'fait' && !handoff.some(l => /^\s*(?:[-*]\s*)?d[ée]cision\s*·/i.test(l) && cite(l, x.id))) erreurs.push(`prérequis ${x.id} : décision marquée « fait » sans entrée « décision » qui la cite dans HANDOFF.md`)
+  PR.set(x.id, x)
+}
+for (const t of T.values()) for (const id of arr(t.prerequis)) if (!PR.has(id)) erreurs.push(`${t.id} : prérequis inconnu ${id}${P ? '' : ' (pas de PREREQUIS.md)'}`)
+const ouverts = t => arr(t.prerequis).filter(id => PR.has(id) && PR.get(id).statut === 'ouvert')
+// Prêt à lancer, phase par phase : une tâche attend ses prérequis ouverts, ou une tâche de sa phase qui attend ;
+// une phase attend la fin de la précédente si une tâche y attend
+const restant = t => !fait(st[t.id] || 'à-faire')
+const pret = []
+let phaseBloquee = null
+for (const ph of [...new Set([...T.values()].filter(restant).map(t => t.phase))].sort((a, b) => a - b)) {
+  const ts = [...T.values()].filter(t => t.phase === ph && restant(t))
+  const attend = new Map(ts.filter(t => ouverts(t).length || st[t.id] === 'besoin-humain').map(t => [t.id, [...(st[t.id] === 'besoin-humain' ? ['besoin-humain'] : []), ...ouverts(t)]]))
+  for (let change = true; change;) {
+    change = false
+    for (const t of ts) if (!attend.has(t.id)) { const d = arr(t.depend_de).filter(x => attend.has(x)); if (d.length) { attend.set(t.id, d); change = true } }
+  }
+  pret.push({ phase: ph, apres_phase: phaseBloquee, taches: ts.length, en_attente: [...attend].map(([id, a]) => ({ id, attend: a })) })
+  if (attend.size && phaseBloquee == null) phaseBloquee = ph
+}
+
 const taches = [...T.values()].filter(t => phaseF == null || t.phase === phaseF).map(t => ({
   id: t.id, titre: t.titre || '', fichier: t.fichier, phase: t.phase, modele: t.modele, effort: t.effort || '',
   depend_de: arr(t.depend_de), ressources: arr(t.ressources), statut: st[t.id] || 'à-faire',
-  verification: arr(t.verification), estimation_tokens: tokens(t.estimation_tokens),
+  verification: arr(t.verification), estimation_tokens: tokens(t.estimation_tokens), prerequis_ouverts: ouverts(t),
 }))
 // Toutes les tâches, quelle que soit la phase demandée : l'orchestrateur vérifie les tâches citées par une décision d'office
 const tous = [...T.values()].map(t => ({ id: t.id, phase: t.phase, statut: st[t.id] || 'à-faire' }))
 const phase_max = Math.max(0, ...[...T.values()].map(t => t.phase || 0))
-if (asJson) console.log(JSON.stringify({ ok: erreurs.length === 0, erreurs, taches, tous, phase_max }, null, 2))
+const bloque = id => [...T.values()].filter(t => restant(t) && arr(t.prerequis).includes(id)).map(t => t.id)
+const prereqs = [...PR.values()].map(x => ({ ...x, bloque: bloque(x.id) }))
+// Une décision reportée qu'aucune tâche restante ne cite ne bloquerait rien : un agent la trancherait à la place de l'humain
+for (const x of prereqs) if (x.type === 'décision' && x.statut === 'ouvert' && !x.bloque.length) erreurs.push(`prérequis ${x.id} : décision ouverte qu'aucune tâche restante ne cite dans « prerequis » (ajoute-la aux tâches qu'elle touche, ou passe-la à « abandonné »)`)
+const orphelins = prereqs.filter(x => x.type !== 'décision' && x.statut === 'ouvert' && !x.bloque.length)
+const pretVu = pret.filter(p => phaseF == null || p.phase === phaseF)
+if (asJson) console.log(JSON.stringify({ ok: erreurs.length === 0, erreurs, taches, tous, phase_max, prerequis: prereqs, pret: pretVu }, null, 2))
 else {
   if (erreurs.length) console.log(erreurs.map(e => '✗ ' + e).join('\n'))
   else {
@@ -134,6 +200,21 @@ else {
     console.log(`✓ plan valide : ${T.size} tâche${T.size > 1 ? 's' : ''}. Reste à faire, en tokens estimés : ` +
       Object.entries(parPhase).map(([p, n]) => `phase ${p} ${fmt(n)}`).join(' · ') +
       ` · total ${fmt(Object.values(parPhase).reduce((a, b) => a + b, 0))}`)
+    if (!P) console.log('ℹ pas de PREREQUIS.md : aucun prérequis déclaré (voir /orchestre:pret)')
+    for (const x of orphelins) console.log(`⚠ prérequis ${x.id} (${x.type}) ouvert, mais aucune tâche restante ne le cite`)
+    const ouv = prereqs.filter(x => x.statut === 'ouvert' && x.bloque.length)
+    if (ouv.length) console.log('Prérequis ouverts : ' + ouv.map(x => `${x.id} (${x.type}) → ${x.bloque.join(', ')}`).join(' · '))
+    if (P || ouv.length) {
+      console.log('Prêt à lancer :')
+      for (const p of pretVu) {
+        const quoi = [
+          ...(p.apres_phase != null ? [`attend la fin de la phase ${p.apres_phase}`] : []),
+          ...(p.en_attente.length === p.taches ? ['aucune tâche ne peut partir'] : []),
+          ...p.en_attente.map(e => `${e.id} attend ${e.attend.join(', ')}`),
+        ]
+        console.log(`- phase ${p.phase} : ${quoi.length ? quoi.join(' ; ') : 'prête'}`)
+      }
+    }
   }
 }
 process.exit(erreurs.length ? 1 : 0)

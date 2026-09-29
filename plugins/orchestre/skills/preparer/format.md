@@ -6,12 +6,13 @@ Un plan est un dossier `plans/<nom>/`, commité sur la branche d'intégration `p
 plans/<nom>/
 ├── taches/T01-<slug>.md …   # une tâche par fichier, gabarit ci-dessous
 ├── SUIVI.md                 # une ligne par tâche ; seul le scribe l'écrit ensuite
-├── HANDOFF.md               # l'en-tête seul à la création (plus les décisions d'un plan converti)
+├── HANDOFF.md               # l'en-tête et les décisions déjà prises
+├── PREREQUIS.md             # ce que le plan attend d'un humain ou de l'environnement
 ├── DISCOVERY.md             # amorcé avec l'exploration
 └── orchestre.config.json
 ```
 
-plan-lint (`node <plugin>/scripts/plan-lint.mjs plans/<nom>`) lit le frontmatter des tâches et la colonne Statut de SUIVI.md ; avec `--integration`, une tâche dont le commit « tâche <id> : » est sur la branche d'intégration, et pas sur la branche de base, compte comme fusionnée. Il refuse : tâche sans `id`, `phase`, `modele`, `verification` ou `definition_du_fini` ; identifiant en double ; dépendance inconnue, cyclique ou vers une phase ultérieure ; deux tâches d'une même phase, sans dépendance entre elles ni ressource commune, qui possèdent les mêmes fichiers.
+plan-lint (`node <plugin>/scripts/plan-lint.mjs plans/<nom>`) lit le frontmatter des tâches et la colonne Statut de SUIVI.md ; avec `--integration`, une tâche dont le commit « tâche <id> : » est sur la branche d'intégration, et pas sur la branche de base, compte comme fusionnée. Il refuse : tâche sans `id`, `phase`, `modele`, `verification` ou `definition_du_fini` ; identifiant en double ; dépendance inconnue, cyclique ou vers une phase ultérieure ; deux tâches d'une même phase, sans dépendance entre elles ni ressource commune, qui possèdent les mêmes fichiers ; un prérequis inconnu, en double, de type ou de statut inconnu, ou une décision marquée « fait » qu'aucune entrée « décision » de HANDOFF.md ne cite. Il dit aussi, phase par phase, quelles tâches attendent un prérequis ouvert.
 
 ## Règles de découpage
 
@@ -39,6 +40,7 @@ lot_parallele: 1A
 fichiers_possedes:
   - chemin/**
 ressources: []          # base, port… partagés : sérialise les tâches
+prerequis: []           # identifiants de PREREQUIS.md : la tâche attend qu'ils soient faits
 budget_contexte: 40%
 estimation_tokens: 1.0M
 max_tours: 60
@@ -72,6 +74,30 @@ Listes du frontmatter : pour les commandes et les critères, une ligne `  - "…
 
 Statuts : à-faire · ajoutée · fusionnée · bloquée · échec · besoin-humain · annulée
 ```
+
+## PREREQUIS.md
+
+Tout ce que le plan attend d'un humain ou de l'environnement avant qu'une tâche puisse partir. Chaque tâche concernée cite ces identifiants dans `prerequis` : tant que l'un d'eux est `ouvert`, elle ne part pas, et les tâches de sa phase qui en dépendent attendent avec elle ; le reste tourne. Elle repartira d'elle-même au premier run qui suit le passage du prérequis à `fait`.
+
+```markdown
+# PREREQUIS — <nom>
+
+| ID | Type | Prérequis | Statut | Preuve |
+|----|------|-----------|--------|--------|
+| D5 | décision | Choisir le fournisseur de modèles de la phase 4 | ouvert | — |
+| H1 | geste | Clé d'API du fournisseur dans `.env` (`PROVIDER_API_KEY`) | fait | confirmé par Fabien le 30/09 |
+| E1 | environnement | Base de test démarrée (`docker compose up -d db`) | ouvert | `docker compose ps db` |
+
+Types : décision · geste · environnement. Statuts : ouvert · fait · abandonné.
+```
+
+- Identifiants : lettres majuscules puis chiffres (D5, H1, E1), comme pour les tâches, et distincts de ceux des tâches.
+- `décision` : un choix qui change une tâche. Il se tranche à la planification ; seule une décision que l'utilisateur choisit de reporter reste ouverte, et elle doit alors être citée dans `prerequis` par les tâches qu'elle touche (plan-lint refuse une décision ouverte que rien ne cite). Tranchée, elle s'écrit dans HANDOFF.md, où les agents la lisent, en entrée qui commence par son type : `décision · majeur · <ID> : …`. Elle passe alors à `fait`, avec la preuve « HANDOFF ».
+- `geste` : ce qu'un agent ne fait jamais — un accès, un secret, un compte payant, des données réelles, un déploiement.
+- `environnement` : un service, un outil ou des données de test dont les vérifications ont besoin.
+- `Preuve` : ce qui montre que c'est fait — l'entrée de HANDOFF, un fichier, une commande sûre, ou la confirmation de l'utilisateur. Jamais le contenu d'un secret.
+- Un `|` dans une cellule s'écrit `\|`. `abandonné` vaut `fait` : le prérequis n'est plus nécessaire.
+- `/orchestre:pret` ajoute en fin de fichier une ligne « Vérifié par /orchestre:pret le <date> : <verdict> ».
 
 ## HANDOFF.md
 
