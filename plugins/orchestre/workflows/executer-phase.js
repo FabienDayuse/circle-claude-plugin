@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Lecture du plan' }, { title: 'Tâches' }, { title: 'Clôture' }],
 }
 
-// Orchestrateur v0.6.1 (plugin orchestre)
+// Orchestrateur v0.6.2 (plugin orchestre)
 // args : { plan, phase, mode: 'auto'|'devia'|'phase', parallelisme, integration, base, decisions, corrections_max, escalade, decisions_office_max, arbitrages, relancer, lint, prefixe_agents }
 // base : branche d'où part la branche d'intégration (main par défaut, lu par plan-lint)
 // arbitrages : options choisies par l'utilisateur depuis le run précédent, [{ tache, titre, option }] ; le scribe les applique avant la lecture du plan
@@ -29,7 +29,9 @@ const LINT = A.lint || '.claude/orchestre/plan-lint.mjs'
 const LINTCMD = /\s/.test(LINT) ? `node "${LINT}"` : `node ${LINT}`
 const BASE = A.base ? ` --base ${A.base}` : ''
 // Écart sensible (données, base, prod, secret) : majeur d'office, quel que soit le classement du replanificateur
-const SENSIBLE = /base de (données|dev|prod)|\bbdd\b|database|\bdump\b|\bprod\b|production|données (personnelles|réelles|de prod|utilisateur)|personal data|\bpii\b|rgpd|gdpr|secret|mot de passe|password|api[ -]?key|clé (d')?api|\.env\b|credential|pg_restore|pg_dump|database_url/i
+// Écarts sensibles, repérés par mots-clés ; SENSIBLE_HORS_ENV sert au reclassement d'une interdiction en relecture
+const SENSIBLE_HORS_ENV = /base de (données|dev|prod)|\bbdd\b|database|\bdump\b|\bprod\b|production|données (personnelles|réelles|de prod|utilisateur)|personal data|\bpii\b|rgpd|gdpr|secret|mot de passe|password|api[ -]?key|clé (d')?api|credential|pg_restore|pg_dump|database_url/i
+const SENSIBLE = new RegExp(SENSIBLE_HORS_ENV.source + '|\\.env\\b', 'i')
 if (!PLAN || !PHASE || !INTEG) return { statut: 'erreur', detail: 'args requis : plan, phase, integration' }
 if (!['auto', 'devia', 'phase'].includes(MODE)) return { statut: 'erreur', detail: `mode inconnu : ${MODE} (auto, devia ou phase)` }
 
@@ -39,12 +41,12 @@ const str = { type: 'string' }, bool = { type: 'boolean' }, strs = { type: 'arra
 const PLAN_S = S({ ok: bool, erreurs: strs, taches: { type: 'array', items: S({ id: str, titre: str, fichier: str, phase: { type: 'integer' }, modele: str, effort: str, depend_de: strs, ressources: strs, statut: str, verification: strs, prerequis_ouverts: strs }, ['id', 'fichier', 'depend_de', 'statut', 'verification', 'prerequis_ouverts']) }, tous: { type: 'array', items: S({ id: str, phase: { type: 'integer' }, statut: str }, ['id']) }, phase_max: { type: 'integer' } }, ['ok', 'taches'])
 const RAPPORT_S = S({
   statut: { type: 'string', enum: ['done', 'partial', 'blocked'] }, resume: str, branche: str, commit: str, chemin: str, fichiers_modifies: strs,
-  ecarts: { type: 'array', items: S({ type: { type: 'string', enum: ['écart', 'angle-mort', 'décision', 'dette', 'besoin-humain'] }, description: str, taches_impactees: strs }, ['type', 'description']) },
+  ecarts: { type: 'array', items: S({ type: { type: 'string', enum: ['écart', 'angle-mort', 'décision', 'dette', 'besoin-humain', 'relecture'] }, description: str, taches_impactees: strs }, ['type', 'description']) },
   decouvertes: { type: 'array', items: S({ categorie: str, contenu: str }, ['categorie', 'contenu']) }, blocage: str,
 }, ['statut', 'resume', 'branche', 'chemin'])
 const RESULTAT_S = S({ commande: str, code: { type: 'integer' }, extrait: str }, ['commande', 'code', 'extrait'])
-const VERIF_S = S({ ok: bool, resultats: { type: 'array', items: RESULTAT_S }, echecs: { type: 'array', items: S({ commande: str, extrait: str }, ['commande']) }, instables: strs }, ['ok', 'resultats'])
-const EVAL_S = S({ verdict: { type: 'string', enum: ['ok', 'ko'] }, manques: strs, non_verifiables: strs }, ['verdict'])
+const VERIF_S = S({ ok: bool, resultats: { type: 'array', items: RESULTAT_S }, echecs: { type: 'array', items: S({ commande: str, extrait: str }, ['commande']) }, instables: strs, interdites: strs }, ['ok', 'resultats'])
+const EVAL_S = S({ verdict: { type: 'string', enum: ['ok', 'ko'] }, manques: strs, non_verifiables: strs, illisibles: strs }, ['verdict'])
 const INTEG_S = S({ ok: bool, fusionne: bool, controle_ok: bool, conflit: bool, commit: str, detail: str }, ['ok', 'fusionne'])
 const SCRIBE_S = S({ ok: bool, commit: str, refuses: { type: 'array', items: S({ id: str, raison: str }, ['id', 'raison']) }, ecartes: { type: 'array', items: S({ id: str, raison: str }, ['id', 'raison']) } }, ['ok'])
 const ENTREES_S = { type: 'array', items: S({ type: str, gravite: { type: 'string', enum: ['mineur', 'majeur'] }, description: str }, ['type', 'gravite', 'description']) }
@@ -56,6 +58,7 @@ const REPLAN_S = S({
   points: { type: 'array', items: S({ titre: str, contexte: str, humain: bool, options: { type: 'array', items: OPTION_S } }, ['titre', 'options']) },
   entrees: ENTREES_S,
   taches_ajoutees: TACHES_S,
+  relectures: { type: 'array', items: S({ relecture: str, ecart: str }, ['relecture']) },
 }, ['majeur', 'entrees'])
 
 // Un seul agent à la fois dans le checkout principal (fusions, suivi)
@@ -65,6 +68,17 @@ const ORDRE = ['haiku', 'sonnet', 'opus', 'fable']
 const auMoins = (m, base) => ORDRE[Math.max(ORDRE.indexOf(m), ORDRE.indexOf(base || 'sonnet'))] || m
 const liste = xs => (xs || []).map(x => '- ' + x).join('\n')
 const effort = t => (t.effort ? { effort: t.effort } : {})
+const uniques = xs => [...new Map(xs.map(x => [JSON.stringify(x), x])).values()]
+// Un rapport de correction ne répète pas les écarts des essais précédents : on les cumule, pour qu'aucun n'échappe au replanificateur
+const cumuler = (avant, apres) => ({ ...apres, ecarts: uniques([...(avant.ecarts || []), ...(apres.ecarts || [])]), decouvertes: apres.decouvertes ?? avant.decouvertes })
+// Commande citée par un agent, comparée à celle de la tâche : sans le « cd <dossier de travail> && » qu'ajoute le vérificateur
+// (un autre cd de tête fait partie de la commande), sans le echo du code de sortie, espaces réduits
+const sansPrefixe = (x, dossier) => { const m = x.match(/^cd\s+("[^"]*"|'[^']*'|\S+)\s*&&\s*/); return m && dossier && m[1].replace(/^["']|["']$/g, '') === dossier ? x.slice(m[0].length) : x }
+const normaliser = (c, dossier) => sansPrefixe(String(c || '').trim(), dossier).replace(/\s*;\s*echo\s+["']?code=\$\?["']?\s*$/, '').replace(/\s+/g, ' ').trim()
+const memeCommande = (a, b, dossier) => normaliser(a, dossier) === normaliser(b, dossier)
+// Une relecture cite un fichier si l'un de ses mots est ce chemin, et non un chemin qui le contient
+const chemin = x => x.replace(/^\.\//, '').replace(/\.+$/, '')
+const cite = (d, f) => String(d).split(/[\s,;:()«»"'`]+/).some(x => x && chemin(x) === chemin(f))
 
 // Prompts
 // Branche d'une tâche : neuve, ou reprise de la plus récente (une branche tenue par un autre worktree ne se reprend pas, on en part)
@@ -72,27 +86,31 @@ const pBranche = t => `Branche : si aucune branche \`tache/${t.id}\` n'existe, c
 const pWorker = (t, isole) => `Tâche ${t.id} du plan ${PLAN}. Lis d'abord ${PLAN}/DISCOVERY.md et les décisions de ${PLAN}/HANDOFF.md, puis ${t.fichier}, et suis son « Prompt de lancement ».
 ${isole ? 'Tu es dans un worktree isolé.' : `Tu es dans le checkout principal, sur ${INTEG}.`} ${pBranche(t)}
 Décisions prises : ${JSON.stringify(decisionsRun())}.
+Un fichier que tes permissions t'interdisent de lire ou de modifier (réglages de l'organisation ou du projet) : ne contourne jamais l'interdiction, par aucune commande ni script ; décris la modification attendue dans un écart de type « relecture », l'humain la fera avant la PR.
 Lance les commandes de vérification de la tâche avant de rendre la main.
 Rapport : statut, résumé, branche, dernier commit, chemin absolu du dossier de travail (pwd), fichiers modifiés, écarts au plan, découvertes utiles aux tâches suivantes.`
 const pVerif = (t, r) => `Vérifie la tâche ${t.id}, branche ${r.branche}. Exécute une par une, sans rien modifier, chaque commande ci-dessous, préfixée par \`cd "${r.chemin}" &&\` :
 ${liste(t.verification)}
-Les échecs listés comme préexistants dans ${PLAN}/DISCOVERY.md ne comptent pas. Si une commande de test échoue, relance-la une seule fois : si elle passe, la vérification passe, mais cite chaque test qui a échoué puis réussi dans « instables ». Pour lire un code de sortie, ne pipe pas la commande : ajoute \`; echo "code=$?"\`. Rends ok ; dans « resultats », pour chaque commande, même réussie, la commande, son code de sortie (celui de la relance s'il y en a eu une) et l'extrait qui le prouve (ligne de bilan, 10 lignes au plus) ; dans « echecs », pour chaque échec qui compte, la commande et un extrait utile de sa sortie (30 lignes au plus). Ne lance jamais une commande qui lit des données de production ou personnelles réelles (dump de prod, base de prod ou copie de prod) : compte-la en échec, avec l'extrait « besoin-humain : données réelles, geste réservé à l'humain ».`
+Les échecs listés comme préexistants dans ${PLAN}/DISCOVERY.md ne comptent pas. Une commande que tes permissions refusent (réglages de l'organisation ou du projet) : ne la contourne jamais, par aucune autre commande ni script, et ne la compte pas en échec ; cite-la dans « interdites », telle qu'elle figure dans la liste ci-dessus, sans le préfixe \`cd\` ; l'humain la lancera avant la PR. Si une commande de test échoue, relance-la une seule fois : si elle passe, la vérification passe, mais cite chaque test qui a échoué puis réussi dans « instables ». Pour lire un code de sortie, ne pipe pas la commande : ajoute \`; echo "code=$?"\`. Rends ok ; dans « resultats », pour chaque commande, même réussie, la commande, son code de sortie (celui de la relance s'il y en a eu une) et l'extrait qui le prouve (ligne de bilan, 10 lignes au plus) ; dans « echecs », pour chaque échec qui compte, la commande et un extrait utile de sa sortie (30 lignes au plus). Ne lance jamais une commande qui lit des données de production ou personnelles réelles (dump de prod, base de prod ou copie de prod) : compte-la en échec, avec l'extrait « besoin-humain : données réelles, geste réservé à l'humain ».`
 const pEval = (t, r, v) => `Évalue la tâche ${t.id}. Lis la définition du fini dans ${t.fichier}, puis le diff \`git -C "${r.chemin}" diff ${INTEG}...${r.branche}\`.
 Résultats du vérificateur, relevés sur cette branche juste avant toi ; ils valent preuve d'exécution : ${JSON.stringify((v && v.resultats) || [])}.${v && (v.instables || []).length ? ` Tests passés seulement à la relance, comptés comme passés : ${JSON.stringify(v.instables)}.` : ''}
-Rapport du worker ; c'est un livrable, pas une preuve : ses affirmations d'exécution ne démontrent rien. ${JSON.stringify({ resume: r.resume, decouvertes: r.decouvertes || [], ecarts: r.ecarts || [] })}
-Pour chaque critère, cherche une preuve : fichier:ligne du diff, test qui le couvre, ou résultat du vérificateur ci-dessus. Un critère qui demande un contenu de rapport est rempli si ce contenu figure dans le rapport du worker. SUIVI.md, HANDOFF.md et DISCOVERY.md ne sont écrits par le scribe qu'en fin de tâche : leur état ne prouve rien, dans un sens comme dans l'autre. Un critère qu'aucune commande de vérification ni le diff ne peut démontrer dans le contexte de cette tâche, quoi que fasse le worker (par exemple un comportement en worktree pour une tâche du checkout principal), n'est pas un manque : cite-le dans « non_verifiables » avec la raison. C'est rare : un critère seulement non prouvé reste un manque. Vérifie aussi que les commentaires, en-têtes, entrées de DECISIONS et procédures ajoutés ou modifiés par le diff disent vrai : ils décrivent ce que le code fait vraiment, et chaque commande d'une procédure destinée à un humain existe dans le dépôt et fait ce que le texte annonce. Un texte faux est un manque. Verdict ko si un seul critère démontrable n'est pas démontré ; liste alors les manques précis. Ne modifie rien.`
+${(v && (v.interdites || []).length) ? `Commandes refusées aux agents par leurs permissions, que l'humain lancera avant la PR : ${JSON.stringify(v.interdites)}. Un critère que seules elles démontrent n'est ni un manque ni un critère non vérifiable.
+` : ''}Rapport du worker ; c'est un livrable, pas une preuve : ses affirmations d'exécution ne démontrent rien. ${JSON.stringify({ resume: r.resume, decouvertes: r.decouvertes || [], ecarts: r.ecarts || [] })}
+Pour chaque critère, cherche une preuve : fichier:ligne du diff, test qui le couvre, ou résultat du vérificateur ci-dessus. Un critère qui demande un contenu de rapport est rempli si ce contenu figure dans le rapport du worker. SUIVI.md, HANDOFF.md et DISCOVERY.md ne sont écrits par le scribe qu'en fin de tâche : leur état ne prouve rien, dans un sens comme dans l'autre. Un critère qu'aucune commande de vérification ni le diff ne peut démontrer dans le contexte de cette tâche, quoi que fasse le worker (par exemple un comportement en worktree pour une tâche du checkout principal), n'est pas un manque : cite-le dans « non_verifiables » avec la raison. C'est rare : un critère seulement non prouvé reste un manque. Un fichier du diff que tes permissions t'interdisent de lire (réglages de l'organisation ou du projet) : ne contourne jamais l'interdiction ; ce n'est ni un manque ni un critère non vérifiable : cite-le dans « illisibles », l'humain le relira avant la PR. Un critère qui ne se démontre qu'en lisant un tel fichier suit la même règle. Vérifie aussi que les commentaires, en-têtes, entrées de DECISIONS et procédures ajoutés ou modifiés par le diff disent vrai : ils décrivent ce que le code fait vraiment, et chaque commande d'une procédure destinée à un humain existe dans le dépôt et fait ce que le texte annonce. Un texte faux est un manque. Verdict ko si un seul critère démontrable n'est pas démontré ; liste alors les manques précis. Ne modifie rien.`
 const pCorr = (t, r, manques) => `Correction de la tâche ${t.id}. Travaille dans ${r.chemin}, sur la branche ${r.branche} : préfixe chaque commande par \`cd "${r.chemin}" &&\` et édite les fichiers par leur chemin absolu sous ce dossier. Relis ${t.fichier} et ${PLAN}/DISCOVERY.md.
 Manques à corriger :
 ${liste(manques)}
-Mêmes règles que la tâche : fichiers possédés seulement, commits sur ${r.branche}, rien dans les fichiers de suivi, ni fusion ni push. Relance les vérifications, puis rends le même format de rapport.`
-const pInteg = (t, r, isole) => `Fusionne la tâche ${t.id} dans le checkout principal : \`git switch ${INTEG}\`, puis \`git merge --no-ff ${r.branche} -m "tâche ${t.id} : ${t.titre}"\`.
+Mêmes règles que la tâche : fichiers possédés seulement, commits sur ${r.branche}, rien dans les fichiers de suivi, ni fusion ni push. Relance les vérifications, puis rends le même format de rapport.${(r.ecarts || []).length ? `
+Écarts déjà remontés aux essais précédents, gardés dans le suivi : ${JSON.stringify(r.ecarts)}. Ne les répète pas ; si ta correction en annule un, dis-le dans un écart.` : ''}${(r.decouvertes || []).length ? `
+Découvertes des essais précédents : ${JSON.stringify(r.decouvertes)}. Rends dans ton rapport la liste à jour : celles qui tiennent toujours, sans celles que ta correction rend fausses, plus les nouvelles.` : ''}`
+const pInteg = (t, r, isole, controle) => `Fusionne la tâche ${t.id} dans le checkout principal : \`git switch ${INTEG}\`, puis \`git merge --no-ff ${r.branche} -m "tâche ${t.id} : ${t.titre}"\`.
 En cas de conflit : \`git merge --abort\`, puis rends ok=false, fusionne=false, conflit=true et les fichiers en cause.
-Sinon, rends fusionne=true, puis lance sur ${INTEG} cette commande de contrôle, sans pipe (ajoute \`; echo "code=$?"\`) : ${(t.verification || [])[0] || 'aucune'}. Rends controle_ok selon son code de sortie, un extrait utile dans detail en cas d'échec, et ok=true seulement si la fusion et le contrôle ont réussi.${isole ? `
+Sinon, rends fusionne=true, puis lance sur ${INTEG} cette commande de contrôle, sans pipe (ajoute \`; echo "code=$?"\`) : ${controle}. Rends controle_ok selon son code de sortie, un extrait utile dans detail en cas d'échec, et ok=true seulement si la fusion et le contrôle ont réussi.${isole ? `
 Supprime ensuite le worktree : \`git worktree unlock "${r.chemin}"\` (ignore l'erreur), puis \`git worktree remove --force "${r.chemin}"\`. Garde la branche.` : ''}`
-const pReplan = (t, r, statut, manques, nonVerif, sensibles = []) => `Replanification après ${t.id} (statut : ${statut}, phase ${PHASE}${DERNIERE ? ', dernière phase du plan' : ''}, mode ${MODE}). Tâche : ${t.fichier} ; son code est sur la branche ${r.branche}${statut === 'fusionnée' ? `, fusionnée dans ${INTEG} (checkout principal)` : `, dans ${r.chemin}`}. Écarts remontés : ${JSON.stringify(r.ecarts || [])}. Manques : ${JSON.stringify(manques)}. Critères non vérifiables dans le contexte de la tâche : ${JSON.stringify(nonVerif || [])}.${sensibles.length ? ` Écarts sensibles (données, base, prod, secret), majeurs d'office : rends un point pour chacun : ${JSON.stringify(sensibles)}.` : ''}
-Lis ${PLAN}/SUIVI.md, les décisions de ${PLAN}/HANDOFF.md, ${PLAN}/PREREQUIS.md s'il existe, et les tâches restantes de ${PLAN}/taches/. Classe chaque écart mineur ou majeur selon ta grille et rends une entrée par écart.
+const pReplan = (t, r, statut, manques, nonVerif, sensibles = []) => `Replanification après ${t.id} (statut : ${statut}, phase ${PHASE}${DERNIERE ? ', dernière phase du plan' : ''}, mode ${MODE}). Tâche : ${t.fichier} ; son code est sur la branche ${r.branche}${statut === 'fusionnée' ? `, fusionnée dans ${INTEG} (checkout principal)` : `, dans ${r.chemin}`}. Écarts remontés : ${JSON.stringify(r.ecarts || [])}. Manques : ${JSON.stringify(manques)}. Critères non vérifiables dans le contexte de la tâche : ${JSON.stringify(nonVerif || [])}.${sensibles.length ? ` Écarts sensibles (données, base, prod, secret), majeurs d'office : rends un point pour chacun, sauf pour un écart qui ne porte que sur un fichier interdit aux agents (voir plus bas) : ${JSON.stringify(sensibles)}.` : ''}
+Lis ${PLAN}/SUIVI.md, les décisions de ${PLAN}/HANDOFF.md, ${PLAN}/PREREQUIS.md s'il existe, et les tâches restantes de ${PLAN}/taches/. Classe chaque écart mineur ou majeur selon ta grille et rends une entrée par écart, sauf pour ceux que tu rends dans « relectures ».
 Pour chaque écart majeur et chaque critère non vérifiable, rends un point dans « points » : titre, contexte, 2 ou 3 options dont une seule recommandée. Chaque option porte ses actions : entrées HANDOFF, tâches à ajouter (phase ${PHASE} ou plus, jamais une phase passée ; une tâche ajoutée cite dans « prerequis » les prérequis de PREREQUIS.md dont elle a besoin), amendements de tâches pas encore lancées, autres que ${t.id} (critères, fichiers possédés, commandes de vérification ou dépendances à ajouter, jamais rien à retirer). Pour une tâche déjà fusionnée, propose une tâche à ajouter plutôt qu'un amendement. Une option ne cite que des tâches et des fichiers qui existent déjà ou qu'elle crée elle-même. Aucune option ne fait lire, restaurer ou copier des données de production ou personnelles réelles par un agent : ce geste revient à l'humain. Recommande l'option la plus prudente pour la sécurité et les données : un test ou une garde de plus plutôt qu'un risque accepté.${MODE === 'auto' ? ` Mode autonome : l'option recommandée sera appliquée telle quelle, sans relecture humaine avant la PR.` : ''}${DERNIERE ? ` Dernière phase : ne propose une tâche que pour un point qui protège le déploiement, la sécurité ou les données ; pour les autres, une entrée de type « ticket » (à ouvrir après la PR), sans tâche.` : ''}
-Marque « humain » un point qu'aucun agent ne peut trancher (accès, secret, production, données réelles, choix produit), un point qui porte sur un prérequis ouvert de PREREQUIS.md (décision reportée par l'utilisateur, geste humain), un écart de type besoin-humain, ou un problème d'environnement ou d'outillage dont la cause n'est pas démontrée par une sortie de commande citée ci-dessus. Ne modifie rien.`
+Un fichier que les agents n'ont pas le droit de lire ou d'écrire (réglages de l'organisation ou du projet), et qu'il suffit à l'humain de relire ou de modifier avant la PR, n'est jamais un point ni une entrée : rends-le dans « relectures », avec dans « relecture » le fichier et ce que l'humain doit y relire ou modifier, et dans « ecart » la description, recopiée telle quelle, de l'écart remonté qu'elle remplace, s'il ne porte que sur ce fichier et n'est pas de type besoin-humain. Un écart qui porte aussi sur autre chose reste un écart. S'il faut un geste humain avant de pouvoir continuer (un secret manquant pour lancer les tests, par exemple), c'est un besoin humain, pas une relecture. Marque « humain » un point qu'aucun agent ne peut trancher (accès, secret, production, données réelles, choix produit), un point qui porte sur un prérequis ouvert de PREREQUIS.md (décision reportée par l'utilisateur, geste humain), un écart de type besoin-humain, ou un problème d'environnement ou d'outillage dont la cause n'est pas démontrée par une sortie de commande citée ci-dessus. Ne modifie rien.`
 
 // Consignes communes au scribe : tâches créées, amendements, contrôle par plan-lint, compte rendu
 const pSuivi = (id, suivi) => `${suivi.taches.length ? `
@@ -189,15 +207,21 @@ function appliquer(t, pt, suivi) {
 async function clore(t, statut, essais, r, manques = [], trace = {}) {
   const instables = [...new Set(trace.instables || [])], refus = trace.refus || [], nonVerif = trace.nonVerif || []
   const suivi = { entrees: [...(trace.entrees || [])], taches: [], amendements: [], ecartes: [], office: [] }
-  const ecarts = (r && r.ecarts) || []
+  // Fichiers et commandes que les agents n'ont pas le droit de lire, d'écrire ou de lancer : relecture par l'humain avant la PR, sans point ni arrêt
+  const relectures = [...((r && r.ecarts) || []).filter(e => e.type === 'relecture').map(e => e.description), ...(trace.interdites || []).map(c => `commande \`${c}\` refusée aux agents : à lancer par l'humain avant la PR`)]
+  const ecarts = ((r && r.ecarts) || []).filter(e => e.type !== 'relecture')
+  let reclasses = new Set()
   // Écarts sensibles (données, base, prod, secret) : majeurs d'office, quel que soit le classement
   const sensibles = ecarts.filter(e => e.type !== 'besoin-humain' && SENSIBLE.test(e.description || '')).map(e => e.description)
   const majeurSiSensible = e => (SENSIBLE.test(e.description || '') ? { ...e, gravite: 'majeur' } : e)
   let humainVu = false
   if (r && (ecarts.length || statut !== 'fusionnée' || nonVerif.length)) {
-    const rp = await agent(pReplan(t, r, statut, manques, nonVerif, sensibles), { label: `${t.id} · replanification`, agentType: AG('replanificateur'), model: 'opus', schema: REPLAN_S })
+    const rp = await agent(pReplan(t, { ...r, ecarts }, statut, manques, nonVerif, sensibles), { label: `${t.id} · replanification`, agentType: AG('replanificateur'), model: 'opus', schema: REPLAN_S })
     if (rp) {
-      suivi.entrees.push(...(rp.entrees || []).map(majeurSiSensible))
+      // Interdiction remontée comme un écart ordinaire : le replanificateur la reclasse en relecture, qui n'est ni un point ni un écart sensible
+      reclasses = new Set((rp.relectures || []).map(x => x.ecart).filter(Boolean))
+      relectures.push(...(rp.relectures || []).map(x => x.relecture), ...(rp.entrees || []).filter(e => e.type === 'relecture').map(e => e.description))
+      suivi.entrees.push(...(rp.entrees || []).filter(e => e.type !== 'relecture').map(majeurSiSensible))
       suivi.taches.push(...(rp.taches_ajoutees || []).map(versPhase))
       // Un point par écart majeur ou critère non vérifiable : humain → arrêt ; sinon selon le mode
       for (const pt of rp.points || []) {
@@ -207,7 +231,11 @@ async function clore(t, statut, essais, r, manques = [], trace = {}) {
         else points.push(pointDe(t, pt))
       }
       // Un écart sensible sans aucun point de décision : un humain tranche
-      if (sensibles.length && !(rp.points || []).length) { humainVu = true; arreter(pointHumain(t.id, `Écart sensible de ${t.id} sans point de décision`, sensibles.join(' ; '))) }
+      // Reclassement refusé pour un écart que d'autres mots que la mention d'un .env rendent sensible : un humain tranche, quels que soient les autres points
+      const contestes = sensibles.filter(d => reclasses.has(d) && SENSIBLE_HORS_ENV.test(d))
+      if (contestes.length) { humainVu = true; arreter(pointHumain(t.id, `Écart sensible de ${t.id} reclassé en relecture`, contestes.join(' ; '))) }
+      const restants = sensibles.filter(d => !reclasses.has(d))
+      if (restants.length && !(rp.points || []).length) { humainVu = true; arreter(pointHumain(t.id, `Écart sensible de ${t.id} sans point de décision`, restants.join(' ; '))) }
     } else {
       // Sans classement, rien ne passe en silence : écarts notés majeurs, arrêt pour un humain
       suivi.entrees.push(...ecarts.map(e => ({ type: e.type, gravite: 'majeur', description: `${e.description} (non classé : replanificateur sans réponse)` })))
@@ -215,6 +243,10 @@ async function clore(t, statut, essais, r, manques = [], trace = {}) {
       arreter(pointHumain(t.id, `Replanification de ${t.id} sans réponse`, 'Écarts, manques et critères non vérifiables non classés : les relire dans HANDOFF.md.'))
     }
   }
+  // Fichier illisible pour l'évaluateur : une entrée générique, sauf s'il est déjà cité par une relecture
+  relectures.push(...(trace.illisibles || []).filter(f => !relectures.some(d => cite(d, f))).map(f => `${f} : illisible par les agents, à relire par l'humain avant la PR`))
+  const rels = [...new Set(relectures)]
+  suivi.entrees.push(...rels.map(d => ({ type: 'relecture', gravite: 'majeur', description: d })))
   const besoins = ecarts.filter(e => e.type === 'besoin-humain')
   if (besoins.length && !humainVu) arreter(pointHumain(t.id, `Besoin humain signalé par ${t.id}`, besoins.map(e => e.description).join(' ; ')))
   // Tâche non fusionnée qui attend un humain : elle ne repart que sur sa décision (args.relancer)
@@ -226,7 +258,7 @@ async function clore(t, statut, essais, r, manques = [], trace = {}) {
   if (!s || !s.ok) arreter(pointHumain(t.id, `Suivi de ${t.id} non commité`, s ? 'Le scribe n’a pas pu commiter.' : 'Scribe sans réponse.'))
   else if ((s.refuses || []).length) arreter(pointHumain(t.id, `Suivi de ${t.id} : tâches, amendements ou décisions refusés`, JSON.stringify(s.refuses)))
   log(`${t.id} : ${final}`)
-  return { id: t.id, statut: final, essais, branche: r ? r.branche : null, resume: r ? r.resume : '', ...(final !== 'fusionnée' ? { blocage: manques } : {}), ...(instables.length ? { instables } : {}), ...(refus.length ? { refus } : {}), ...(nonVerif.length ? { non_verifiables: nonVerif } : {}) }
+  return { id: t.id, statut: final, essais, branche: r ? r.branche : null, resume: r ? r.resume : '', ...(final !== 'fusionnée' ? { blocage: manques } : {}), ...(instables.length ? { instables } : {}), ...(refus.length ? { refus } : {}), ...(nonVerif.length ? { non_verifiables: nonVerif } : {}), ...(rels.length ? { relectures: rels } : {}) }
 }
 
 async function executer(t, isole) {
@@ -234,19 +266,26 @@ async function executer(t, isole) {
     log(`${t.id} démarre (${isole ? 'worktree' : 'checkout principal'})`)
     let r = await agent(pWorker(t, isole), { label: `${t.id} · worker`, agentType: AG(isole ? 'worker-isole' : 'worker'), model: t.modele || 'sonnet', schema: RAPPORT_S, ...(isole ? { isolation: 'worktree' } : {}), ...effort(t) })
     let essais = 1
-    const trace = { instables: [], refus: [], nonVerif: [] }
+    const trace = { instables: [], refus: [], nonVerif: [], illisibles: [], interdites: [] }
     for (;;) {
       if (!r) return await clore(t, 'échec', essais, null, ['worker sans réponse (limite d’usage ou erreur API)'], trace)
       if (r.statut === 'blocked') return await clore(t, 'bloquée', essais, r, [r.blocage || 'bloquée par le worker'], trace)
       let manques = [], par = 'vérification'
       const v = await agent(pVerif(t, r), { label: `${t.id} · vérification`, agentType: AG('verificateur'), model: 'sonnet', schema: VERIF_S })
       if (v && (v.instables || []).length) trace.instables.push(...v.instables)
+      // Commandes refusées par les permissions : seules celles de la tâche comptent comme interdites ; une autre est un échec
+      const refusees = (v && v.interdites) || []
+      const inconnues = refusees.filter(x => !(t.verification || []).some(c => memeCommande(c, x, r.chemin)))
+      trace.interdites = [...new Set([...trace.interdites, ...(t.verification || []).filter(c => refusees.some(x => memeCommande(c, x, r.chemin)))])]
       if (!v) manques = ['vérificateur sans réponse']
-      else if (!v.ok) manques = (v.echecs || []).map(e => `${e.commande} : ${e.extrait || 'échec'}`)
+      else if (!v.ok || inconnues.length) manques = [...(v.echecs || []).map(e => `${e.commande} : ${e.extrait || 'échec'}`), ...inconnues.map(x => `${x} : refusée selon le vérificateur, mais ce n'est pas une commande de vérification de la tâche`)]
+      // Aucune commande permise : rien ne prouve la tâche, et une correction n'y changerait rien
+      else if ((t.verification || []).length && (t.verification || []).every(c => trace.interdites.includes(c))) return await clore(t, 'bloquée', essais, r, [`aucune commande de vérification permise aux agents : ${trace.interdites.join(' ; ')}`], trace)
       else {
         par = 'évaluation'
-        const e = await agent(pEval(t, r, v), { label: `${t.id} · évaluation`, agentType: AG('evaluateur'), model: 'opus', schema: EVAL_S })
-        if (e) trace.nonVerif = e.non_verifiables || []
+        const e = await agent(pEval(t, r, { ...v, interdites: trace.interdites }), { label: `${t.id} · évaluation`, agentType: AG('evaluateur'), model: 'opus', schema: EVAL_S })
+        // Un fichier illisible une fois le reste : on cumule d'une évaluation à l'autre
+        if (e) { trace.nonVerif = e.non_verifiables || []; trace.illisibles = [...new Set([...trace.illisibles, ...(e.illisibles || [])])] }
         if (!e) manques = ['évaluateur sans réponse']
         else if (e.verdict === 'ko') manques = e.manques && e.manques.length ? e.manques : ['verdict ko sans détail']
       }
@@ -255,15 +294,20 @@ async function executer(t, isole) {
       trace.refus.push({ essai: essais, par, manques })
       const modele = auMoins(ESC[Math.min(essais - 1, ESC.length - 1)], t.modele)
       log(`${t.id} : correction ${essais} sur ${modele}`)
-      r = await agent(pCorr(t, r, manques), { label: `${t.id} · correction ${essais}`, agentType: AG('worker'), model: modele, schema: RAPPORT_S, ...effort(t) })
+      const c = await agent(pCorr(t, r, manques), { label: `${t.id} · correction ${essais}`, agentType: AG('worker'), model: modele, schema: RAPPORT_S, ...effort(t) })
       essais++
+      // Correction sans réponse : on garde le rapport des essais précédents (écarts, relectures, branche)
+      if (!c) return await clore(t, 'échec', essais, r, ['correction sans réponse (limite d’usage ou erreur API)'], trace)
+      r = cumuler(r, c)
     }
-    const i = await exclusif(() => agent(pInteg(t, r, isole), { label: `${t.id} · fusion`, agentType: AG('integrateur'), model: 'sonnet', schema: INTEG_S }))
+    // Contrôle post-fusion : la première commande de vérification que les agents ont le droit de lancer
+    const controle = (t.verification || []).find(c => !trace.interdites.includes(c)) || 'aucune'
+    const i = await exclusif(() => agent(pInteg(t, r, isole, controle), { label: `${t.id} · fusion`, agentType: AG('integrateur'), model: 'sonnet', schema: INTEG_S }))
     if (!i) return await clore(t, 'bloquée', essais, r, ['intégrateur sans réponse'], trace)
     if (!(i.fusionne ?? i.ok)) return await clore(t, 'bloquée', essais, r, [`fusion : ${i.detail || 'échec'}`], trace)
     if (!(i.controle_ok ?? i.ok)) {
       // Fusion faite mais contrôle en échec : la tâche reste fusionnée et le run s'arrête pour un humain
-      const detail = `contrôle post-fusion en échec sur ${INTEG} (${(t.verification || [])[0] || 'aucune commande'}) : ${i.detail || 'échec'}`
+      const detail = `contrôle post-fusion en échec sur ${INTEG} (${controle}) : ${i.detail || 'échec'}`
       trace.entrees = [{ type: 'besoin-humain', gravite: 'majeur', description: detail }]
       arreter({ tache: t.id, titre: `Contrôle post-fusion en échec après ${t.id}`, contexte: detail, humain: true, options: [{ id: 'reparer', description: `Réparer sur ${INTEG}, rejouer les vérifications, puis relancer la phase`, impact: '', recommande: true }, { id: 'arreter', description: 'Arrêter le plan ici', impact: '', recommande: false }] })
     }
@@ -312,6 +356,7 @@ const ko = resultats.filter(r => r.statut !== 'fusionnée')
 const bilan = {
   phase: PHASE, mode: MODE, taches: resultats, non_lancees: [...restantes.keys()], reportees,
   taches_ajoutees: ajoutees.map(x => ({ id: x.id, phase: x.phase, titre: x.titre })),
+  relectures: resultats.flatMap(x => (x.relectures || []).map(d => ({ tache: x.id, relecture: d }))),
   decisions_office: office, amendements_ecartes: ecartesRun, points_a_trancher: points, arbitrages_appliques: appliques, en_attente: enAttente, en_attente_prerequis: attentePrerequis,
 }
 if (arret) return { statut: 'arbitrage', arbitrage: arret, ...bilan }

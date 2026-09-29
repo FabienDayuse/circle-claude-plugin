@@ -470,4 +470,159 @@ await cas('R5 : le replanificateur lit PREREQUIS.md ; un point sur un prérequis
   for (const x of ['plans/p/PREREQUIS.md', 'un point qui porte sur un prérequis ouvert de PREREQUIS.md', 'cite dans « prerequis »']) assert.ok(rp.includes(x), 'replan : ' + x)
   vide('R5', q)
 })
+// ——— v0.6.2 : fichiers interdits aux agents → relectures avant la PR, sans arrêt ———
+await cas("U1 : évaluateur OK avec un fichier illisible → entrée « relecture », pas de replanification ni d'arrêt", async () => {
+  const { res, calls, q } = await scenario('U1', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0)], 'T00 · vérification': [ok(1)], 'T00 · évaluation': [{ verdict: 'ok', illisibles: ['agents/x/.env.example'] }], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé'); assert.equal(idx(calls, 'T00 · replanification'), -1)
+  assert.deepEqual(res.relectures, [{ tache: 'T00', relecture: "agents/x/.env.example : illisible par les agents, à relire par l'humain avant la PR" }])
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('"type":"relecture"') && sc.includes('agents/x/.env.example'), 'scribe : entrée relecture')
+  const ev = byLabel(calls, 'T00 · évaluation')[0]
+  assert.ok(ev.prompt.includes('« illisibles »') && ev.prompt.includes('ne contourne jamais') && ev.opts.schema.properties.illisibles, 'évaluateur : consigne et schéma')
+  assert.ok(byLabel(calls, 'T00 · worker')[0].prompt.includes('écart de type « relecture »'), 'worker : consigne')
+  assert.ok(byLabel(calls, 'T00 · worker')[0].opts.schema.properties.ecarts.items.properties.type.enum.includes('relecture'), 'worker : type relecture dans le schéma')
+  vide('U1', q)
+})
+await cas('U2 : écart « relecture » qui cite un .env → ni écart sensible, ni point, ni arrêt', async () => {
+  const REL = [{ type: 'relecture', description: 'ajouter MR_REVIEW_MODEL_MAX_ATTEMPTS à agents/mr_review/.env.example (fichier interdit aux agents)' }]
+  const { res, calls, q } = await scenario('U2', { 'lecteur-plan': [plan(T00, T01)], ...t00(REL), 'T00 · suivi': [SOK], ...t01() }, { mode: 'devia' })
+  assert.equal(res.statut, 'terminé'); assert.equal(idx(calls, 'T00 · replanification'), -1)
+  assert.equal(res.relectures.length, 1); assert.ok(byLabel(calls, 'T00 · suivi')[0].prompt.includes('MR_REVIEW_MODEL_MAX_ATTEMPTS'))
+  vide('U2', q)
+})
+await cas('U3 : écart ordinaire + relecture → le replanificateur ne voit que l’écart ordinaire, sans écart sensible', async () => {
+  const MIX = [{ type: 'relecture', description: 'relire .env.example' }, ...ECART]
+  const { res, calls, q } = await scenario('U3', { 'lecteur-plan': [plan(T00)], ...t00(MIX), 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const rp = byLabel(calls, 'T00 · replanification')[0].prompt
+  assert.ok(rp.includes('isSuperAdmin') && !rp.includes('relire .env.example') && !rp.includes('Écarts sensibles'), 'replan : écarts filtrés')
+  assert.ok(rp.includes('n\'est jamais un point ni une entrée : rends-le dans « relectures »') && byLabel(calls, 'T00 · replanification')[0].opts.schema.properties.relectures, 'replan : consigne et schéma')
+  assert.equal(res.statut, 'terminé'); assert.equal(res.relectures.length, 1)
+  vide('U3', q)
+})
+await cas('U4 : écarts du premier essai gardés après une correction qui ne les répète pas ; découvertes remises à la correction', async () => {
+  const REL = [{ type: 'relecture', description: 'ajouter X à agents/x/.env.example' }, ...ECART]
+  const { res, calls, q } = await scenario('U4', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0, { ecarts: REL })], 'T00 · vérification': [ok(1), ok(2)],
+    'T00 · évaluation': [{ verdict: 'ko', manques: ['M1'] }, { verdict: 'ok' }], 'T00 · correction 1': [rap(1, { ecarts: [...ECART] })], 'T00 · fusion': [FOK], 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé'); assert.equal(res.relectures.length, 1)
+  const co = byLabel(calls, 'T00 · correction 1')[0]
+  assert.ok(co.prompt.includes('Écarts déjà remontés') && co.prompt.includes('isSuperAdmin'), 'correction : écarts précédents')
+  assert.ok(co.prompt.includes('routes préchauffées 0') && co.prompt.includes('liste à jour'), 'correction : découvertes précédentes')
+  assert.ok(co.opts.schema.properties.ecarts.items.properties.type.enum.includes('relecture'), 'correction : type relecture dans le schéma')
+  assert.ok(byLabel(calls, 'T00 · évaluation')[1].prompt.includes('isSuperAdmin'), 'évaluation 2 : écarts cumulés')
+  const rp = byLabel(calls, 'T00 · replanification')[0].prompt
+  assert.ok(rp.includes('isSuperAdmin') && !rp.includes('agents/x/.env.example'), 'replan : écart du premier essai, sans la relecture')
+  assert.equal(rp.split('isSuperAdmin optionnel').length - 1, 1, 'replan : écart répété une seule fois')
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.ok(sc.includes('routes préchauffées 1') && !sc.includes('routes préchauffées 0'), 'scribe : découvertes de la correction, qui a rendu la liste à jour')
+  vide('U4', q)
+})
+await cas('U5 : fichier illisible à la première évaluation seulement → relecture gardée', async () => {
+  const { res, calls, q } = await scenario('U5', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0)], 'T00 · vérification': [ok(1), ok(2)],
+    'T00 · évaluation': [{ verdict: 'ko', manques: ['M1'], illisibles: ['a/.env.example'] }, { verdict: 'ok' }], 'T00 · correction 1': [rap(1)], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé'); assert.equal(idx(calls, 'T00 · replanification'), -1)
+  assert.deepEqual(res.relectures.map(x => x.relecture), ["a/.env.example : illisible par les agents, à relire par l'humain avant la PR"])
+  vide('U5', q)
+})
+await cas('U6 : correction sans réponse → échec avec le rapport du premier essai (écarts, relecture, branche)', async () => {
+  const REL = [{ type: 'relecture', description: 'ajouter X à agents/x/.env.example' }, ...ECART]
+  const { res, calls, q } = await scenario('U6', { 'lecteur-plan': [plan(T00, T01)], 'T00 · worker': [rap(0, { ecarts: REL })], 'T00 · vérification': [ok(1)],
+    'T00 · évaluation': [{ verdict: 'ko', manques: ['M1'] }], 'T00 · correction 1': [null], 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const t = res.taches.find(x => x.id === 'T00')
+  assert.equal(t.statut, 'échec'); assert.equal(t.branche, 'tache/T00'); assert.equal(t.essais, 2)
+  assert.ok(t.blocage[0].includes('correction sans réponse'))
+  assert.ok(byLabel(calls, 'T00 · replanification')[0].prompt.includes('isSuperAdmin'), 'replan : écart du premier essai')
+  assert.deepEqual(t.relectures, ['ajouter X à agents/x/.env.example'])
+  assert.ok(byLabel(calls, 'T00 · suivi')[0].prompt.includes('branche tache/T00'), 'scribe : branche gardée')
+  assert.ok(res.non_lancees.includes('T01'))
+  vide('U6', q)
+})
+await cas('U7 : commande de vérification refusée par les permissions → ni échec ni correction ; relecture ; contrôle post-fusion sur la suivante', async () => {
+  const REF = 'grep -q MR_MAX agents/x/.env.example'
+  const T = { ...T00, verification: [REF, 'sh scripts/e2e-local.sh'] }
+  const V = { ok: true, resultats: [{ commande: 'sh scripts/e2e-local.sh', code: 0, extrait: '96 passed' }], interdites: ['cd "/repo" && ' + REF + ' ; echo "code=$?"'] }
+  const { res, calls, q } = await scenario('U7', { 'lecteur-plan': [plan(T)], 'T00 · worker': [rap(0)], 'T00 · vérification': [V], 'T00 · évaluation': [{ verdict: 'ok' }], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé'); assert.equal(idx(calls, 'T00 · correction 1'), -1); assert.equal(idx(calls, 'T00 · replanification'), -1)
+  const ve = byLabel(calls, 'T00 · vérification')[0]
+  assert.ok(ve.prompt.includes('« interdites »') && ve.prompt.includes('ne la contourne jamais') && ve.opts.schema.properties.interdites, 'vérificateur : consigne et schéma')
+  assert.ok(byLabel(calls, 'T00 · évaluation')[0].prompt.includes(REF), 'évaluateur : commande refusée signalée')
+  const fu = byLabel(calls, 'T00 · fusion')[0].prompt
+  assert.ok(fu.includes('commande de contrôle, sans pipe (ajoute `; echo "code=$?"`) : sh scripts/e2e-local.sh'), 'contrôle : première commande permise')
+  assert.deepEqual(res.relectures.map(x => x.relecture), ["commande `" + REF + "` refusée aux agents : à lancer par l'humain avant la PR"])
+  vide('U7', q)
+})
+await cas('U8 : interdiction remontée comme écart ordinaire → reclassée en relecture par le replanificateur, sans arrêt ; pas si l’écart touche aussi la prod', async () => {
+  const D = 'lecture de agents/x/.env.example refusée : variable MR_MAX non ajoutée'
+  const RP = { majeur: false, entrees: [], points: [], relectures: [{ ecart: D, relecture: 'agents/x/.env.example : ajouter MR_MAX' }] }
+  const { res, calls, q } = await scenario('U8', { 'lecteur-plan': [plan(T00, T01)], ...t00([{ type: 'écart', description: D }]), 'T00 · replanification': [RP], 'T00 · suivi': [SOK], ...t01() }, { mode: 'devia' })
+  assert.equal(res.statut, 'terminé'); assert.deepEqual(res.relectures.map(x => x.relecture), ['agents/x/.env.example : ajouter MR_MAX'])
+  const rp = byLabel(calls, 'T00 · replanification')[0].prompt
+  assert.ok(rp.includes('Écarts sensibles') && rp.includes('sauf pour un écart qui ne porte que sur un fichier interdit aux agents'), 'replan : exception aux écarts sensibles')
+  vide('U8', q)
+  const D2 = 'lecture de agents/x/.env.example refusée ; le script lit aussi la base de prod'
+  const RP2 = { majeur: false, entrees: [], points: [], relectures: [{ ecart: D2, relecture: 'agents/x/.env.example : relire' }] }
+  const b = await scenario('U8b', { 'lecteur-plan': [plan(T00, T01)], ...t00([{ type: 'écart', description: D2 }]), 'T00 · replanification': [RP2], 'T00 · suivi': [SOK] }, { mode: 'devia' })
+  assert.equal(b.res.statut, 'arbitrage'); assert.ok(b.res.arbitrage.humain && b.res.arbitrage.titre.includes('Écart sensible'), 'reclassement refusé : la prod reste sensible')
+  assert.equal(b.res.relectures.length, 1)
+  vide('U8b', b.q)
+})
+await cas('U9 : même fichier cité par le worker, l’évaluateur et le replanificateur → une seule relecture', async () => {
+  const R0 = 'ajouter X à agents/x/.env.example'
+  const RP = { majeur: false, entrees: [{ type: 'relecture', gravite: 'majeur', description: R0 }], points: [], relectures: [{ relecture: R0 }] }
+  const { res, calls, q } = await scenario('U9', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0, { ecarts: [{ type: 'relecture', description: R0 }, ...ECART] })], 'T00 · vérification': [ok(1)],
+    'T00 · évaluation': [{ verdict: 'ok', illisibles: ['agents/x/.env.example'] }], 'T00 · fusion': [FOK], 'T00 · replanification': [RP], 'T00 · suivi': [SOK] })
+  assert.deepEqual(res.relectures.map(x => x.relecture), [R0])
+  const sc = byLabel(calls, 'T00 · suivi')[0].prompt
+  assert.equal(sc.split(R0).length - 1, 1, 'scribe : une seule entrée')
+  vide('U9', q)
+})
+await cas('U7b : toutes les commandes de vérification refusées → bloquée sans correction ni fusion', async () => {
+  const REF = 'grep -q MR_MAX agents/x/.env.example'
+  const T = { ...T00, verification: [REF] }
+  const { res, calls, q } = await scenario('U7b', { 'lecteur-plan': [plan(T, T01)], 'T00 · worker': [rap(0)], 'T00 · vérification': [{ ok: true, resultats: [], interdites: [REF] }], 'T00 · replanification': [RIEN], 'T00 · suivi': [SOK] })
+  const t = res.taches.find(x => x.id === 'T00')
+  assert.equal(t.statut, 'bloquée'); assert.ok(t.blocage[0].includes('aucune commande de vérification permise'))
+  for (const l of ['T00 · évaluation', 'T00 · correction 1', 'T00 · fusion']) assert.equal(idx(calls, l), -1, l)
+  assert.equal(t.relectures.length, 1); assert.ok(res.non_lancees.includes('T01'))
+  vide('U7b', q)
+})
+await cas('U7c : commande « interdite » qui n’est pas une commande de la tâche → échec, correction', async () => {
+  const { res, calls, q } = await scenario('U7c', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0)], 'T00 · vérification': [{ ...ok(1), interdites: ['cat secrets/x'] }, ok(2)],
+    'T00 · correction 1': [rap(1)], 'T00 · évaluation': [{ verdict: 'ok' }], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé'); assert.equal(res.taches[0].essais, 2)
+  assert.ok(byLabel(calls, 'T00 · correction 1')[0].prompt.includes('cat secrets/x : refusée selon le vérificateur'))
+  assert.equal(res.relectures.length, 0)
+  vide('U7c', q)
+})
+await cas('U8c : reclassement d’un écart qui touche aussi la prod → arrêt humain, même avec un autre point', async () => {
+  const D = 'lecture de agents/x/.env.example refusée ; le script lit aussi la base de prod'
+  const PT = { titre: 'Contrat', contexte: '', options: [{ id: 'A', description: 'garder', recommande: true }, { id: 'B', description: 'changer' }] }
+  const RP = { majeur: true, entrees: [], points: [PT], relectures: [{ ecart: D, relecture: 'agents/x/.env.example : relire' }] }
+  const { res, q } = await scenario('U8c', { 'lecteur-plan': [plan(T00, T01)], ...t00([{ type: 'écart', description: D }, ...ECART]), 'T00 · replanification': [RP], 'T00 · suivi': [SOK] }, { mode: 'auto' })
+  assert.equal(res.statut, 'arbitrage'); assert.ok(res.arbitrage.humain && res.arbitrage.titre.includes('reclassé en relecture'))
+  vide('U8c', q)
+})
+await cas('U9b : .env.example de la racine illisible, relecture d’un autre .env.example → deux relectures', async () => {
+  const R0 = 'agents/x/.env.example : ajouter MR_MAX'
+  const { res, q } = await scenario('U9b', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0, { ecarts: [{ type: 'relecture', description: R0 }] })], 'T00 · vérification': [ok(1)],
+    'T00 · évaluation': [{ verdict: 'ok', illisibles: ['.env.example'] }], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] })
+  assert.deepEqual(res.relectures.map(x => x.relecture), [R0, ".env.example : illisible par les agents, à relire par l'humain avant la PR"])
+  vide('U9b', q)
+})
+await cas('U4b : correction qui ne rend pas de découvertes → celles de l’essai précédent restent', async () => {
+  const C = { statut: 'done', resume: 'corrigé', branche: 'tache/T00', commit: 'c1', chemin: '/repo' }
+  const { calls, q } = await scenario('U4b', { 'lecteur-plan': [plan(T00)], 'T00 · worker': [rap(0)], 'T00 · vérification': [ok(1), ok(2)],
+    'T00 · évaluation': [{ verdict: 'ko', manques: ['M1'] }, { verdict: 'ok' }], 'T00 · correction 1': [C], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] })
+  assert.ok(byLabel(calls, 'T00 · suivi')[0].prompt.includes('routes préchauffées 0'))
+  vide('U4b', q)
+})
+await cas('U7d : deux commandes qui ne diffèrent que par leur cd de tête → seule la refusée est interdite', async () => {
+  const A = 'cd api && pnpm test', W = 'cd web && pnpm test'
+  const T = { ...T00, verification: [A, W] }
+  const V = { ok: true, resultats: [{ commande: W, code: 0, extrait: 'ok' }], interdites: ['cd "/repo" && ' + A + ' ; echo "code=$?"'] }
+  const { res, calls, q } = await scenario('U7d', { 'lecteur-plan': [plan(T)], 'T00 · worker': [rap(0)], 'T00 · vérification': [V], 'T00 · évaluation': [{ verdict: 'ok' }], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK] })
+  assert.equal(res.statut, 'terminé')
+  assert.deepEqual(res.relectures.map(x => x.relecture), ["commande `" + A + "` refusée aux agents : à lancer par l'humain avant la PR"])
+  assert.ok(byLabel(calls, 'T00 · fusion')[0].prompt.includes(': ' + W + '.'), 'contrôle : la commande web')
+  vide('U7d', q)
+})
 console.log(`TOUT EST VERT (${n} cas)`)

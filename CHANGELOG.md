@@ -1,6 +1,25 @@
 # Changelog — plugin orchestre
 
-Chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases), sauf la 0.6, qui change l'empaquetage.
+Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
+
+## 0.6.2 — 29/09/2026 : fichiers interdits aux agents
+
+Au premier run réel (mr-review-recall, phase 2), les réglages de l'organisation interdisaient aux agents de lire les `.env.example` qu'une tâche devait modifier : le blocage remontait comme un point à trancher. Pendant ce run, la session pilote recevait aussi des demandes sur le dépôt (vérifier un fichier, afficher un diff) alors que les agents travaillaient dans le checkout principal.
+
+- Fichier que les agents n'ont pas le droit de lire ou d'écrire, ou commande qu'ils n'ont pas le droit de lancer (réglages de l'organisation ou du projet) : aucun agent ne contourne l'interdiction, et le run ne s'arrête pas, sauf dans les deux cas notés plus bas. Il en sort une entrée `relecture · majeur` de HANDOFF.md, que l'humain fait avant la PR, sans replanification ni écart sensible, dans les trois modes. Nouveau champ de rapport : `relectures`.
+  - Le worker décrit la modification attendue dans un écart de type `relecture`.
+  - Le vérificateur cite une commande refusée dans `interdites` : elle ne compte pas en échec et ne déclenche aucune correction. Le contrôle post-fusion prend la première commande permise. Une « interdite » qui n'est pas une commande de la tâche compte en échec ; une tâche dont aucune commande n'est permise finit bloquée, sans correction ni fusion, car rien ne la prouve.
+  - L'évaluateur cite un fichier illisible dans `illisibles` : ce n'est ni un manque ni un critère non vérifiable. Un fichier cité une fois reste en relecture aux évaluations suivantes.
+  - Le replanificateur reclasse en relecture une interdiction que le worker a remontée comme un écart ordinaire (champ `relectures`). Le reclassement ne lève l'écart sensible que si seule la mention d'un `.env` le rendait sensible : un écart reclassé qui cite aussi une base, la prod ou un secret arrête le run pour un humain, quels que soient les autres points.
+- `/orchestre:lancer` : les relectures vont dans le résumé de phase. À la fin, elles sont listées avec la commande à lancer soi-même dans un terminal à part : un secret glissé dans l'un de ces fichiers n'entre jamais dans le contexte du pilote.
+- `/orchestre:lancer` se place à la racine du dépôt au début de chaque phase. Pendant un run, il ne touche pas au checkout principal : ni `switch`, `checkout`, `stash`, `reset` ni commit, aucune écriture, et `git status` seulement avec `GIT_OPTIONAL_LOCKS=0`. Une demande sur le dépôt attend la fin du run.
+- `/orchestre:preparer` et `/orchestre:pret` repèrent les fichiers interdits aux agents dès la planification : une tâche ne les possède pas, aucune commande de vérification ne les lit, et une entrée `relecture` les annonce.
+- Corrections :
+  - Après une correction, les écarts des essais précédents étaient perdus, car le rapport de correction remplaçait celui du worker : un écart majeur remonté au premier essai, un contrat changé par exemple, échappait au replanificateur. Ils sont maintenant cumulés d'un essai à l'autre. Le worker de correction les reçoit pour ne pas les répéter, et reçoit aussi les découvertes précédentes, qu'il rend à jour ; s'il ne rend pas de découvertes, les précédentes restent. Valait déjà pour la v0.5.
+  - Conséquence assumée : un écart sensible remonté à un essai reste sensible même si la correction l'a réparé. Il donne un point (arrêt en arrêt sur déviation, décision d'office en autonome, point à trancher en arrêt par phase), ou un arrêt humain si le replanificateur n'en rend aucun.
+  - Une correction sans réponse (limite d'usage, erreur d'API) faisait finir la tâche en échec sans aucun rapport, avec la raison « worker sans réponse ». Elle finit maintenant en échec avec le rapport des essais précédents (écarts, relectures, branche) et la raison « correction sans réponse ».
+- Scribe : une entrée `relecture`, `ticket` ou `angle-mort` déjà présente mot pour mot sous le même titre ne s'ajoute pas une seconde fois, à la relance d'une tâche par exemple. Les refus et blocages s'ajoutent toujours, car ils comptent les essais.
+- Tests : 67 scénarios (15 nouveaux), 13 cas plan-lint, 30 mutations détectées, chacune par un cas qui échoue.
 
 ## 0.6.1 — 29/09/2026 : prêt à lancer
 

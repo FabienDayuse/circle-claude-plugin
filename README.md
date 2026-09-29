@@ -4,7 +4,7 @@ Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plu
 
 | Plugin | Version | Rôle |
 | :- | :- | :- |
-| `orchestre` | 0.6.1 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
+| `orchestre` | 0.6.2 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
@@ -75,6 +75,8 @@ Dans une session neuve. Pré-vol (version, réglages, git, plan-lint et prérequ
 - **arrêt sur déviation** : le run s'arrête sur tout écart majeur pour un arbitrage ;
 - **autonome** : l'option la plus prudente de chaque point majeur est prise d'office ; tout point humain arrête le run, et le run s'arrête aussi au-delà de 3 décisions d'office.
 
+Pendant un run, la session pilote ne touche pas au checkout principal, où travaillent les agents : une demande sur le dépôt attend la fin du run. Un fichier que les agents n'ont pas le droit de lire ou d'écrire (réglages de l'organisation, par exemple les `.env.example`), ou une commande qu'ils n'ont pas le droit de lancer, n'arrête pas le run : il devient une relecture, à faire toi-même avant la PR, avec la commande donnée à la fin.
+
 Suivre un run : `/workflows`. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
 
 ### Premier essai conseillé
@@ -134,7 +136,7 @@ Un run égale une phase. Pour chaque tâche prête (dépendances fusionnées, pr
 | Replanification | `replanificateur` | opus | classe les écarts, prépare les points à trancher avec leurs options |
 | Suivi | `scribe` | sonnet | seul à écrire SUIVI, HANDOFF, DISCOVERY et les tâches créées ou amendées |
 
-Garde-fous : aucun agent ne pousse, ne fusionne dans `main` ni ne déploie ; aucun agent n'ouvre, ne restaure ni ne copie de données de production ou personnelles réelles (ces gestes reviennent à l'humain) ; un écart qui touche des données, une base, la prod ou un secret est toujours majeur ; un run interrompu ne se reprend pas, on en relance un nouveau, et les tâches déjà fusionnées sont sautées.
+Garde-fous : aucun agent ne pousse, ne fusionne dans `main` ni ne déploie ; aucun agent n'ouvre, ne restaure ni ne copie de données de production ou personnelles réelles (ces gestes reviennent à l'humain) ; un écart qui touche des données, une base, la prod ou un secret est toujours majeur ; aucun agent ne contourne une interdiction de lecture ou d'écriture, et le fichier concerné va en relecture humaine avant la PR ; un run interrompu ne se reprend pas, on en relance un nouveau, et les tâches déjà fusionnées sont sautées.
 
 ## Contenu du dépôt
 
@@ -158,7 +160,7 @@ tests/
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 52 scénarios du workflow, avec des agents simulés, rien n'est lancé pour de vrai ; 13 cas de plan-lint dans un dépôt git temporaire.
+- Tests : `npm test` : 67 scénarios du workflow, avec des agents simulés, rien n'est lancé pour de vrai ; 13 cas de plan-lint dans un dépôt git temporaire.
 - Validation : `npm run validate` (`claude plugin validate` sur le plugin et sur la marketplace).
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
 - Publier une version :
@@ -170,7 +172,9 @@ tests/
 
 ## Limites connues
 
-- Le plugin a tourné en réel pour la première fois le 29/09, sur un plan de 37 tâches : la phase 1 est passée (une tâche, fusionnée en 2 essais). Les prérequis et `/orchestre:pret` (0.6.1) n'ont pas encore tourné en réel.
+- Le plugin a tourné en réel pour la première fois le 29/09, sur un plan de 37 tâches : les phases 1 et 2 ont tourné en 0.6.0. Les prérequis et `/orchestre:pret` (0.6.1), les relectures (0.6.2) n'ont pas encore tourné en réel.
+- Les relectures ne sont relues par aucun agent : sans toi avant la PR, un fichier interdit aux agents part sans relecture.
+- Une interdiction que le worker remonte comme un écart ordinaire n'est reclassée en relecture que si sa description ne cite ni base, ni prod, ni secret (`DATABASE_URL`, `JWT_SECRET`…) : sinon le run s'arrête pour un humain.
 - `/orchestre:pret` repère les commandes « sûres » sur la foi de la configuration et de DISCOVERY.md : dans le doute, il demande de les lancer soi-même avec `!`.
 - Les réglages (worktree, reprise sur limite d'usage, permissions) ne peuvent pas venir d'un plugin : `/orchestre:installer` les écrit dans chaque projet.
 - Les tokens réels ne sont pas relevés automatiquement : lecture dans `/workflows`, tâche par tâche. Sur le pilote, le réel a été de 3 à 8 fois l'estimation.
