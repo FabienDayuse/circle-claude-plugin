@@ -4,7 +4,7 @@ Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plu
 
 | Plugin | Version | Rôle |
 | :- | :- | :- |
-| `orchestre` | 0.6.2 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
+| `orchestre` | 0.6.3 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
@@ -37,7 +37,7 @@ Vérifier : `claude plugin list` affiche `orchestre@circle` activé, et `/orches
 
 ## Utiliser
 
-Quatre commandes, dans l'ordre :
+Quatre commandes, dans l'ordre, et une cinquième pour suivre l'avancement :
 
 ### 1. `/orchestre:installer` : préparer le dépôt
 
@@ -77,7 +77,29 @@ Dans une session neuve. Pré-vol (version, réglages, git, plan-lint et prérequ
 
 Pendant un run, la session pilote ne touche pas au checkout principal, où travaillent les agents : une demande sur le dépôt attend la fin du run. Un fichier que les agents n'ont pas le droit de lire ou d'écrire (réglages du projet ou de l'organisation), ou une commande qu'ils n'ont pas le droit de lancer, n'arrête pas le run : il devient une relecture, à faire toi-même avant la PR, avec la commande donnée à la fin.
 
-Suivre un run : `/workflows`. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
+Suivre un run : `/orchestre:etat`, ci-dessous, pour le plan ; `/workflows` pour l'étape de chaque agent. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
+
+### 5. `/orchestre:etat [plans/<nom>]` : voir où en est le plan
+
+À tout moment, y compris dans la session pilote pendant un run : la commande ne fait que lire, sans switch, sans écriture ni verrou git. Sans argument, elle prend le seul plan de `plans/`. Un script calcule le tableau à partir de plan-lint et de git, et Claude le recopie tel quel :
+
+```text
+## mr-review-recall — 12/37 tâches · 32 %
+`███████░░░░░░░░░░░░░░░░░` phase 3 en cours · dernière fusion T09 il y a 12 min
+
+| Phase | Avancement | Tâches |
+| :-- | :-- | :-- |
+| ✓ 1 | `██████████` 100 % | 1/1 |
+| ✓ 2 | `██████████` 100 % | 7/7 |
+| ● 3 | `████░░░░░░` 40 % | 4/10 |
+| ○ 4 | `░░░░░░░░░░` 0 % | 0/19 |
+
+**En cours** : T12 (checkout, dernier commit il y a 3 min) · T13 (worktree, démarrée)
+
+**À toi** : D5 (décision) bloque T15 · 2 relectures avant la PR · 1 ticket après la PR
+```
+
+✓ phase finie, ● commencée, ⚠ une tâche y attend un humain, est bloquée ou en échec, ○ pas commencée. Une tâche est « en cours » quand sa branche `tache/<id>` existe ; l'étape exacte de chaque agent se lit dans `/workflows`. Les relectures comptées sont toutes les entrées `relecture` de HANDOFF.md. L'exemple ci-dessus est illustratif.
 
 ### Premier essai conseillé
 
@@ -148,19 +170,22 @@ plugins/orchestre/
 ├── skills/preparer/                 /orchestre:preparer, format d'un plan
 ├── skills/pret/                     /orchestre:pret
 ├── skills/lancer/                   /orchestre:lancer
+├── skills/etat/                     /orchestre:etat
 ├── agents/                          les 8 agents du workflow
 ├── workflows/executer-phase.js      le workflow, un run par phase
-└── scripts/plan-lint.mjs            validation et compilation d'un plan
+└── scripts/                         plan-lint.mjs (validation et compilation d'un plan), etat.mjs (/orchestre:etat)
 tests/
 ├── scenarios.mjs                    scénarios simulés du workflow
 ├── plan-lint.test.mjs               plan-lint sur des plans jouets
+├── etat.test.mjs                    /orchestre:etat sur un dépôt jouet
+├── modele.test.mjs                  modèle de réglages de l'installer
 └── depot-jouet.sh                   dépôt jouet pour un essai réel
 ```
 
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 67 scénarios du workflow, avec des agents simulés, rien n'est lancé pour de vrai ; 13 cas de plan-lint dans un dépôt git temporaire.
+- Tests : `npm test` : 67 scénarios du workflow, avec des agents simulés, rien n'est lancé pour de vrai ; 13 cas de plan-lint et 7 cas de `/orchestre:etat` dans des dépôts git temporaires ; le modèle de réglages de l'installer.
 - Validation : `npm run validate` (`claude plugin validate` sur le plugin et sur la marketplace).
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
 - Publier une version :

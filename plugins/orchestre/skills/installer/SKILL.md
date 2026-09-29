@@ -76,4 +76,4 @@ Fusionne sans rien retirer, montre le résultat, commite avec l'accord de l'util
 
 ## 7. Bilan
 
-Résume en quelques lignes ce qui a été écrit et ce qui reste à faire (commit, `.gitignore`). Puis la suite : ouvrir une session neuve pour que les réglages s'appliquent, `/orchestre:preparer` pour écrire ou convertir un plan, `/orchestre:pret plans/<nom>` la veille pour vérifier que tout est prêt, `/orchestre:lancer plans/<nom>` pour l'exécuter.
+Résume en quelques lignes ce qui a été écrit et ce qui reste à faire (commit, `.gitignore`). Puis la suite : ouvrir une session neuve pour que les réglages s'appliquent, `/orchestre:preparer` pour écrire ou convertir un plan, `/orchestre:pret plans/<nom>` la veille pour vérifier que tout est prêt, `/orchestre:lancer plans/<nom>` pour l'exécuter, `/orchestre:etat` pour suivre l'avancement, même pendant un run.

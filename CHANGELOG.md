@@ -2,6 +2,17 @@
 
 Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
 
+## 0.6.3 — 29/09/2026 : état du plan
+
+- Nouvelle commande `/orchestre:etat [plans/<nom>]` : l'avancement du plan en un tableau compact.
+  - Une ligne par phase, avec sa barre de progression.
+  - Les tâches en cours : branche `tache/<id>`, dans le checkout ou un worktree, âge du dernier commit.
+  - Ce qui attend l'utilisateur : prérequis ouverts et tâches qu'ils bloquent, tâches en attente d'un humain, bloquées ou en échec, relectures avant la PR, tickets, erreurs de plan-lint.
+  - Sans argument, le seul plan de `plans/`.
+- Faite pour la session pilote pendant un run : elle ne fait que lire (aucun switch, aucune écriture, git sans verrou optionnel), à partir de plan-lint et de git. Le script `scripts/etat.mjs` calcule tout, et Claude ne fait que recopier une quinzaine de lignes. L'étape de chaque agent reste dans `/workflows`.
+- Vérifié avec Claude Code 2.1.285, avec et sans argument : la commande injectée dans la skill est autorisée par `allowed-tools`, le tableau est recopié tel quel et le dépôt reste inchangé.
+- Tests : 7 cas pour l'état dans un dépôt jouet (`tests/etat.test.mjs`), dans `npm test`.
+
 ## 0.6.2 — 29/09/2026 : fichiers interdits aux agents
 
 Au premier run réel (mr-review-recall, phase 2), les agents n'avaient pas le droit de lire les `.env.example` qu'une tâche devait modifier : la règle `Read(./.env.*)` que `/orchestre:installer` écrit dans `.claude/settings.local.json` les couvre aussi, à toutes les profondeurs. Le blocage remontait comme un point à trancher. Pendant ce run, la session pilote recevait aussi des demandes sur le dépôt (vérifier un fichier, afficher un diff) alors que les agents travaillaient dans le checkout principal.

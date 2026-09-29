@@ -62,7 +62,7 @@ Résumé final : tâches fusionnées, branche d'intégration prête pour une PR,
 
 ## Pendant un run
 
-Les agents travaillent dans le checkout principal. Tant qu'un run tourne, tu n'y touches pas : aucun `git switch`, `checkout`, `stash`, `reset` ni commit, aucune écriture de fichier, et `git status` seulement avec `GIT_OPTIONAL_LOCKS=0`. Une commande qui compare deux commits (`git diff <a>...<b>`, `git log`) reste permise. Si l'utilisateur demande autre chose sur le dépôt, dis-lui que tu le feras à la fin du run, puis fais-le à ce moment-là.
+Les agents travaillent dans le checkout principal. Tant qu'un run tourne, tu n'y touches pas : aucun `git switch`, `checkout`, `stash`, `reset` ni commit, aucune écriture de fichier, et `git status` seulement avec `GIT_OPTIONAL_LOCKS=0`. Une commande qui compare deux commits (`git diff <a>...<b>`, `git log`) reste permise. Si l'utilisateur demande autre chose sur le dépôt, dis-lui que tu le feras à la fin du run, puis fais-le à ce moment-là. Pour savoir où en est le plan, `/orchestre:etat` lit seulement et peut tourner pendant le run.
 
 ## Contexte
 
