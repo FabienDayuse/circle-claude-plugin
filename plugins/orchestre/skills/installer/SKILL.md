@@ -10,6 +10,8 @@ allowed-tools:
   - Bash(git status *)
   - Bash(git ls-files *)
   - Bash(git check-ignore *)
+  - Bash(command -v *)
+  - Bash(printenv PATH)
 ---
 # Installer orchestre dans ce dépôt
 
@@ -33,10 +35,11 @@ Un plugin ne peut pas fixer ces réglages lui-même : ils vont dans `.claude/set
    - `allow` : le workflow, les commandes git des agents, `date`, `test -e` ;
    - `deny` : `git push` et la lecture des `.env` et `.env.*`, à toutes les profondeurs, sauf les modèles versionnés (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`), que les agents doivent pouvoir lire et modifier. Les exceptions `Read(!…)` viennent juste après `Read(./.env.*)`, dans le même fichier : placées avant, ou dans un autre fichier de réglages, elles n'annulent rien.
    - Installation d'avant la 0.6.2 : si `Read(./.env.*)` est déjà là sans ces exceptions, ajoute-les juste après. Si une règle qui couvre les `.env.*` vient d'un autre fichier (réglages de l'utilisateur ou de l'organisation), dis-le : elle ne s'annule pas d'ici, et les fichiers qu'elle couvre passeront en relecture avant la PR.
-2. Ajoute dans `allow` les règles de plan-lint et du suivi pour cette version du plugin : `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs *)` et `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/suivi.mjs *)`. Les agents du workflow lancent le suivi eux-mêmes : sans sa règle, chacun demanderait la permission, et le run se suspendrait. Retire les règles plan-lint et suivi d'une version précédente du plugin (même règle, autre numéro de version dans le chemin).
+2. Ajoute dans `allow` les règles des scripts du plugin pour cette version : `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs *)`, `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/suivi.mjs *)` et `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/worktrees.mjs *)`. Les agents du workflow lancent le suivi et le nettoyage des worktrees eux-mêmes : sans ces règles, chacun demanderait la permission, et le run se suspendrait. Retire les règles des scripts d'une version précédente du plugin (même règle, autre numéro de version dans le chemin).
 3. Outil de déploiement : repère celui du projet (fichiers de config, scripts de `package.json`, CI : railway, vercel, fly, heroku, netlify, kubectl, terraform…) et fais confirmer par l'utilisateur. Ajoute-le dans `deny` (`Bash(<outil> *)`) : le déploiement reste un geste humain.
 4. Commandes du projet : repère les commandes d'installation, de test, de lint, de typecheck et de build (`package.json`, `Makefile`, `composer.json`, `pyproject.toml`, CI…) et, s'il existe déjà des plans, les commandes de `verification` de `plans/*/taches/*.md`. Propose de les autoriser, pour que les agents ne s'arrêtent pas sur une demande de permission : une règle précise par commande (`Bash(pnpm test *)`), jamais `Bash(*)` ni un gestionnaire entier (`Bash(npm *)`). Ajoute celles que l'utilisateur accepte.
 5. `git check-ignore -q .claude/settings.local.json` : si le fichier n'est pas ignoré, propose de l'ajouter à `.gitignore`.
+6. Outils dans le shell des agents : pour chaque outil que lancent les commandes du projet repérées au point 4 (`node`, `pnpm`, `php`, `composer`, `python`, `go`…), `command -v <outil>`. Si l'un est introuvable, les agents préfixeraient chaque commande par `export PATH=…`, et la garde d'isolement des worktrees de Claude Code refuse une commande ainsi composée. Trouve son dossier (demande-le à l'utilisateur s'il n'est pas évident : `~/.local/<outil>/bin`, `~/.nvm/versions/node/<version>/bin`, `/opt/homebrew/bin`, `~/.volta/bin`…), puis propose d'ajouter dans `.claude/settings.local.json` la clé `"env": { "PATH": "<dossier>:<valeur actuelle de printenv PATH>" }`, écrite en entier (les variables n'y sont pas développées). Montre-la et écris-la après accord ; elle vaudra pour les sessions suivantes.
 
 Conseil à donner en une ligne : le pilote a tourné en mode de permission auto ; en mode manuel, toute commande non autorisée suspend le run jusqu'à la réponse de l'utilisateur.
 
@@ -76,4 +79,4 @@ Fusionne sans rien retirer, montre le résultat, commite avec l'accord de l'util
 
 ## 7. Bilan
 
-Résume en quelques lignes ce qui a été écrit et ce qui reste à faire (commit, `.gitignore`). Puis la suite : ouvrir une session neuve pour que les réglages s'appliquent, `/orchestre:preparer` pour écrire ou convertir un plan, `/orchestre:pret plans/<nom>` la veille pour vérifier que tout est prêt, `/orchestre:lancer plans/<nom>` pour l'exécuter, `/orchestre:etat` pour suivre l'avancement, même pendant un run.
+Résume en quelques lignes ce qui a été écrit et ce qui reste à faire (commit, `.gitignore`). Pour chaque plan, la préparation de l'environnement (`preparation`, `preparation_partagee` dans `orchestre.config.json`) se règle avec `/orchestre:pret`. Puis la suite : ouvrir une session neuve pour que les réglages s'appliquent, `/orchestre:preparer` pour écrire ou convertir un plan, `/orchestre:pret plans/<nom>` la veille pour vérifier que tout est prêt, `/orchestre:lancer plans/<nom>` pour l'exécuter, `/orchestre:etat` pour suivre l'avancement, même pendant un run.

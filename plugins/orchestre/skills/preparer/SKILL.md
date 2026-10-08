@@ -61,7 +61,7 @@ Rien de ce qui peut se savoir avant le run ne doit se découvrir pendant.
 
 ## 4. Écrire
 
-Écris `plans/<nom>/` : les tâches dans `taches/`, `SUIVI.md` (toutes les tâches à « à-faire »), `HANDOFF.md`, `PREREQUIS.md` (tableau vide si le plan n'attend rien), `DISCOVERY.md` amorcé avec l'étape 1, `orchestre.config.json` avec `branche_integration: "plan/<nom>"` et la branche de base dans `branche_base`. Termine le plan par une tâche de revue globale sur opus, en lecture seule.
+Écris `plans/<nom>/` : les tâches dans `taches/`, `SUIVI.md` (toutes les tâches à « à-faire »), `HANDOFF.md`, `PREREQUIS.md` (tableau vide si le plan n'attend rien), `DISCOVERY.md` amorcé avec l'étape 1, `orchestre.config.json` avec `branche_integration: "plan/<nom>"`, la branche de base dans `branche_base`, et la préparation de l'environnement (`preparation`, `preparation_partagee`, voir le format) tirée du dépôt : des commandes simples, à faire valider par l'utilisateur. Termine le plan par une tâche de revue globale sur opus, en lecture seule.
 
 ## 5. Valider
 

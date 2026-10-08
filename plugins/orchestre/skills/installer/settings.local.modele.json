@@ -8,6 +8,7 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git merge *)",
+      "Bash(git merge-base *)",
       "Bash(git worktree *)",
       "Bash(git branch *)",
       "Bash(git diff *)",

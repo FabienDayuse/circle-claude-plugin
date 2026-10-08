@@ -20,6 +20,7 @@ plan-lint (`node <plugin>/scripts/plan-lint.mjs plans/<nom>`) lit le frontmatter
 - Des tranches verticales, chacune sous 50 % de contexte. Pas de micro-tâches : chaque tâche coûte un worker, une vérification, une évaluation, une fusion et un suivi.
 - L'ordre d'exécution ne vient que de `phase`, `depend_de` et `ressources` : deux tâches d'une même phase, sans dépendance entre elles ni ressource commune, peuvent tourner en même temps, chacune dans un worktree si le parallélisme choisi au lancement le permet. Elles ne doivent alors posséder aucun fichier en commun. Déclare les ressources (base, port, service) au plus juste : deux tâches qui en partagent une tournent l'une après l'autre. `lot_parallele` et la colonne Lot de SUIVI.md sont indicatifs : rien ne les lit.
 - Chaque critère de la définition du fini se démontre par le diff ou par une commande de `verification` lancée dans le contexte de la tâche. La première commande de `verification` sert aussi de contrôle après fusion : mets-y la plus représentative.
+- Chaque commande de `verification` est une commande simple : ni `cd`, `export` ou affectation en tête, ni enchaînement (`&&`, `;`, `|`), ni code évalué en ligne (`node -e`, `python -c`…). Un agent isolé dans un worktree se verrait refuser une commande composée par la garde d'isolement de Claude Code ; plan-lint la signale. Une vérification qui demande plusieurs étapes devient un script du projet, possédé par la tâche ou par une tâche d'outillage.
 - Aucune commande de `verification` ne lit des données de production ou personnelles réelles. Une répétition sur données réelles (dump de prod) est une étape de l'humain, écrite dans la procédure de déploiement, avec des commandes vérifiées dans le dépôt.
 - Un test n'écrit pas dans une base partagée comme la base de dev : il utilise une base de test dédiée, que le script de test recrée.
 - Une dernière tâche de revue globale, sur opus, en lecture seule. Elle vérifie aussi que commentaires, DECISIONS et procédures disent vrai.
@@ -134,7 +135,9 @@ Les échecs de tests déjà présents avant le plan vont dans « Commandes véri
   "corrections_max": 2,
   "escalade": ["sonnet", "opus"],
   "decisions_office_max": 3,
-  "plafond_session_pilote": 0.65
+  "plafond_session_pilote": 0.65,
+  "preparation": ["<installation des dépendances depuis le lockfile>", "<génération de code>"],
+  "preparation_partagee": { "<ressource>": ["<préparation du service commun, par exemple la base de test>"] }
 }
 ```
 
@@ -142,3 +145,6 @@ Les échecs de tests déjà présents avant le plan vont dans « Commandes véri
 - `branche_base` : branche d'où part la branche d'intégration ; `main` par défaut, à préciser si le dépôt en utilise une autre.
 - `evaluateur` est indicatif : l'évaluation est toujours systématique.
 - `plafond_session_pilote` : part du contexte de la session pilote au-delà de laquelle `/orchestre:lancer` propose de reprendre dans une session neuve.
+- `preparation` : commandes du projet qui remettent un dossier de travail à jour, sans toucher à un service commun (dépendances, code généré). Chaque worker les lance une fois sur sa branche, l'intégrateur après chaque fusion, avant le contrôle post-fusion. Sans elles, un worktree ou une fusion peut garder des dépendances ou du code généré périmés.
+- `preparation_partagee` : pour chaque ressource déclarée par les tâches (`ressources`), les commandes qui préparent ce service commun (migration de la base de test…). Elles ne tournent que pour une tâche qui déclare la ressource, donc sous son verrou.
+- Des commandes simples, comme les vérifications. Le plugin ne connaît aucune stack : il lance ce que le projet déclare.

@@ -187,6 +187,39 @@ try {
     mkdirSync(join(racine, 'plans', 'vide'), { recursive: true })
     const r = lint('plans/vide'); assert.equal(r.code, 2); assert.match(r.err, /dossier de tâches introuvable/)
   })
+  cas('avertissements : vérifications composées des tâches restantes, préparation composée ou sans ressource déclarée ; rien n’est bloqué', () => {
+    const V = ["\"cd api && pnpm test\"", "\"git diff --quiet plan/x...HEAD -- src; echo $?\"", "\"PATH=/opt/n/bin:$PATH pnpm typecheck\"", "\"pnpm exec tsx -e 'import(1)'\"", "\"grep -E 'a|b;c' src/x.ts\"", "\"pnpm test -- --reporter=dot 2>&1\"", "\"git diff --quiet plan/x...HEAD -- src\""]
+    const d = plan('av', { T01: tache('T01', { verification: V, ressources: '[base-test]' }), T02: tache('T02', { verification: ['"cd x && make"'], fichiers: ['lib/**'] }) }, [['T01', 'à-faire'], ['T02', 'annulée']])
+    writeFileSync(join(racine, d, 'orchestre.config.json'), JSON.stringify({ preparation: ['pnpm install --frozen-lockfile', 'pnpm prisma generate && pnpm build'], preparation_partagee: { 'base-test': ['pnpm db:test:prepare'], 'port-3000': ['pnpm e2e:prepare'] } }))
+    const r = lint(d, '--json')
+    assert.equal(r.code, 0, r.out); assert.equal(r.json.ok, true)
+    const a = r.json.avertissements
+    assert.deepEqual(a.filter(x => x.startsWith('T01 :')).map(x => x.match(/« (.*) » \((.*?)\) :/).slice(1)), [
+      ['cd api && pnpm test', 'enchaînement ou sous-commande, cd, export ou affectation en tête'],
+      ['git diff --quiet plan/x...HEAD -- src; echo $?', 'enchaînement ou sous-commande'],
+      ['PATH=/opt/n/bin:$PATH pnpm typecheck', 'cd, export ou affectation en tête'],
+      ["pnpm exec tsx -e 'import(1)'", 'code évalué en ligne'],
+    ], 'guillemets, redirection et commande simple ne sont pas signalés')
+    assert.ok(!a.some(x => x.startsWith('T02')), 'tâche annulée : pas d’avertissement')
+    assert.ok(a.includes('preparation : « pnpm prisma generate && pnpm build » (enchaînement ou sous-commande) : un agent isolé dans un worktree se la verra refuser (garde d\'isolement de Claude Code) : en faire une commande simple, ou un script du projet'))
+    assert.ok(a.includes('preparation_partagee : aucune tâche ne déclare la ressource « port-3000 » ; ses commandes ne seront jamais lancées'))
+    assert.equal(a.length, 6)
+    const t = lint(d)
+    assert.equal(t.code, 0); assert.match(t.out, /^✓ plan valide/); assert.match(t.out, /\n⚠ T01 : vérification « cd api && pnpm test »/)
+    writeFileSync(join(racine, d, 'orchestre.config.json'), JSON.stringify({ preparation: 'pnpm install', preparation_partagee: { base: 'x' } }))
+    const e = lint(d, '--json')
+    assert.equal(e.code, 1)
+    assert.deepEqual(e.json.erreurs, ['orchestre.config.json : « preparation » doit être une liste de commandes', 'orchestre.config.json : « preparation_partagee » doit associer à chaque ressource une liste de commandes'])
+  })
+
+  cas('avertissements : ni faux positifs (grep -e, sed -e, find -exec \\;, guillemets) ni faux négatifs (substitution entre guillemets, php -r, node -p, chemin absolu)', () => {
+    const non = ['grep -e "TODO" src', "sed -e 's/a/b/' x.txt", 'find src -name "*.tmp" -exec rm {} \\;', "grep -E 'a|b;c' src", 'sh scripts/verifier.sh', 'pnpm test -- --reporter=dot 2>&1', "echo 'a `b` $(c)'"]
+    const oui = [['grep "$(cat x)" src', 'enchaînement ou sous-commande'], ['echo "`date`"', 'enchaînement ou sous-commande'], ['php -r "echo 1;"', 'code évalué en ligne'], ['node -p "1+1"', 'code évalué en ligne'], ['/usr/bin/python3 -c "print(1)"', 'code évalué en ligne'], ['node --no-warnings -e "x"', 'code évalué en ligne'], ['deno eval "1"', 'code évalué en ligne'], ['node /home/u/x.mjs', 'script en chemin absolu']]
+    const d = plan('av2', { T01: tache('T01', { verification: [...non, ...oui.map(([c]) => c)].map(c => JSON.stringify(c)) }) })
+    const a = lint(d, '--json').json.avertissements
+    assert.deepEqual(a.map(x => x.match(/« (.*) » \((.*?)\) :/).slice(1)), oui)
+  })
+
   console.log(`plan-lint : TOUT EST VERT (${n} cas)`)
 } finally {
   rmSync(racine, { recursive: true, force: true })

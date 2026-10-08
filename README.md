@@ -4,7 +4,7 @@ Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plu
 
 | Plugin | Version | Rôle |
 | :- | :- | :- |
-| `orchestre` | 0.6.3 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
+| `orchestre` | 0.8.0 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
@@ -43,9 +43,10 @@ Quatre commandes, dans l'ordre, et une cinquième pour suivre l'avancement :
 
 Une fois par dépôt, à sa racine. Un plugin ne peut pas fixer les réglages dont l'orchestrateur a besoin : la commande les écrit dans le projet, en montrant chaque changement avant de le faire.
 
-- `.claude/settings.local.json` (personnel, non versionné) : `worktree.baseRef: "head"` (les worktrees partent de la branche d'intégration), `autoContinueAtUsageLimit` (un run en pause sur limite d'usage repart seul), autorisations du workflow, de plan-lint, des commandes git des agents et, sur proposition, des commandes de test et de build du projet ; refus de `git push`, de l'outil de déploiement du projet et de la lecture des `.env` et `.env.*`, à toutes les profondeurs, sauf les modèles versionnés (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`), que les agents lisent et modifient. Sur un projet installé avant la 0.6.2, la commande propose d'ajouter ces exceptions.
+- `.claude/settings.local.json` (personnel, non versionné) : `worktree.baseRef: "head"` (les worktrees partent de la branche d'intégration), `autoContinueAtUsageLimit` (un run en pause sur limite d'usage repart seul), autorisations du workflow, des scripts du plugin (plan-lint, suivi, nettoyage des worktrees), des commandes git des agents et, sur proposition, des commandes de test et de build du projet ; refus de `git push`, de l'outil de déploiement du projet et de la lecture des `.env` et `.env.*`, à toutes les profondeurs, sauf les modèles versionnés (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`), que les agents lisent et modifient. Sur un projet installé avant la 0.6.2, la commande propose d'ajouter ces exceptions.
 - `.worktreeinclude` : les fichiers non versionnés (`.env`…) à copier dans les worktrees des tâches parallèles.
 - Exclusion de `plans/` et `.claude/` par le formateur et le linter du projet.
+- Si les outils du projet (node, pnpm, php…) sont introuvables dans le shell des agents, une clé `env` (PATH) dans `.claude/settings.local.json` : sans elle, les agents préfixeraient leurs commandes par `export PATH=…`, ce que la garde d'isolement des worktrees refuse.
 - Retrait d'une ancienne installation manuelle de l'orchestrateur (voir [Migrer](#migrer-depuis-linstallation-manuelle-v05-et-avant)).
 
 Le pilote a tourné en mode de permission auto. En mode manuel, toute commande non autorisée suspend le run jusqu'à la réponse.
@@ -63,13 +64,15 @@ La veille du lancement, sans exécuter aucune tâche :
 
 - l'environnement : réglages, outils, git, formateur, dossiers non suivis, autorisations des commandes de vérification ;
 - les prérequis : les décisions encore ouvertes, à trancher sur-le-champ, et les gestes qui te reviennent, avec la marche à suivre. Pour un plan écrit avant la 0.6.1, la commande construit d'abord `PREREQUIS.md` ;
-- une répétition à blanc des commandes de vérification sûres (sans base partagée, données réelles, appel payant ni déploiement), qui révèle les outils ou autorisations manquants et les échecs déjà présents.
+- une répétition à blanc des commandes de vérification sûres (sans base partagée, données réelles, appel payant ni déploiement), qui révèle les outils ou autorisations manquants et les échecs déjà présents ;
+- la préparation de l'environnement, dans `orchestre.config.json` : `preparation` (dépendances, code généré : lancée par chaque worker sur sa branche et par l'intégrateur après chaque fusion, avant le contrôle) et `preparation_partagee` (service commun comme une base de test, par ressource déclarée). La commande la propose d'après le dépôt si elle manque ;
+- les commandes de vérification composées, que plan-lint signale : un agent isolé dans un worktree se les verrait refuser.
 
 Elle rend un verdict par phase, par exemple « phases 1 à 3 prêtes ; phase 4 : T12 attend D5 ». Pendant le run, une tâche dont un prérequis reste ouvert ne part pas, et le reste de la phase tourne. `--sans-repetition` saute la répétition.
 
 ### 4. `/orchestre:lancer plans/<nom>` : exécuter
 
-Dans une session neuve. Pré-vol (version, réglages, git, plan-lint et prérequis de la phase, formateur), choix du mode et du nombre de tâches simultanées, puis un run du workflow par phase :
+Dans une session neuve. Pré-vol (version, réglages, git, nettoyage des worktrees laissés par les essais précédents, plan-lint et prérequis de la phase, formateur, suivi), choix du mode et du nombre de tâches simultanées, puis un run du workflow par phase :
 
 - **arrêt par phase** : points à trancher, puis résumé de la phase dans la question « on continue ? » (conseillé pour un premier plan) ;
 - **arrêt sur déviation** : le run s'arrête sur tout écart majeur pour un arbitrage ;
@@ -77,7 +80,7 @@ Dans une session neuve. Pré-vol (version, réglages, git, plan-lint et prérequ
 
 Pendant un run, la session pilote ne touche pas au checkout principal, où travaillent les agents : une demande sur le dépôt attend la fin du run. Un fichier que les agents n'ont pas le droit de lire ou d'écrire (réglages du projet ou de l'organisation), ou une commande qu'ils n'ont pas le droit de lancer, n'arrête pas le run : il devient une relecture, à faire toi-même avant la PR, avec la commande donnée à la fin.
 
-Suivre un run : `/orchestre:etat`, ci-dessous, pour le plan ; `/workflows` pour l'étape de chaque agent. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
+Suivre un run : `/orchestre:etat`, ci-dessous, pour le plan ; `/workflows` pour l'étape de chaque agent. Depuis la 0.8.0, l'état du plan et des runs est aussi tenu dans `plans/<nom>/suivi.json` (hors git), que seul `scripts/suivi.mjs` écrit. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
 
 ### 5. `/orchestre:etat [plans/<nom>]` : voir où en est le plan
 
@@ -126,7 +129,8 @@ Ou depuis un terminal : `claude plugin update orchestre@circle`, puis une sessio
 
 - Une mise à jour n'arrive que si la version de `plugins/orchestre/.claude-plugin/plugin.json` a changé : sinon, la commande répond que le plugin est déjà à jour.
 - Mise à jour automatique : `/plugin` → *Marketplaces* → `circle` → *Enable auto-update*. Pour un dépôt privé, elle a besoin d'un identifiant git déjà enregistré (clé SSH dans `ssh-agent`, ou `gh auth setup-git`) ; sinon elle échoue sans bruit et garde la version en place.
-- Le chemin de plan-lint contient le numéro de version : après une mise à jour, `/orchestre:lancer` propose de remplacer la règle d'autorisation correspondante.
+- Le chemin des scripts du plugin contient le numéro de version : après une mise à jour, `/orchestre:lancer` propose de remplacer les règles d'autorisation correspondantes.
+- Depuis la 0.6.3 vers la 0.8.0 : relancer `/orchestre:installer` dans chaque dépôt (règles des scripts `suivi.mjs` et `worktrees.mjs`, `git merge-base`, clé `env` si besoin), puis `/orchestre:pret plans/<nom>` pour la préparation de l'environnement. Les plans en cours reprennent tels quels ; au premier lancement, `/orchestre:lancer` régénère le tableau de SUIVI.md et propose de le commiter.
 - Version installée : `claude plugin list`.
 
 ## Partager avec l'équipe d'un dépôt
@@ -157,11 +161,11 @@ Un run égale une phase. Pour chaque tâche prête (dépendances fusionnées, pr
 | Fusion | `integrateur` | sonnet | `--no-ff` dans `plan/<nom>`, puis contrôle post-fusion |
 | Replanification | `replanificateur` | opus | classe les écarts, prépare les points à trancher avec leurs options |
 | Suivi | `scribe` | sonnet | seul à écrire HANDOFF, DISCOVERY et les tâches créées ou amendées ; clôt la tâche par `suivi.mjs`, qui régénère SUIVI.md |
-| Fin de run | `greffier` | haiku | clôt le run par `suivi.mjs fin-run`, puis commite SUIVI.md s'il a changé |
+| Fin de run | `greffier` | haiku | clôt le run par `suivi.mjs fin-run`, commite SUIVI.md s'il a changé, retire les worktrees propres des tâches (`worktrees.mjs`) |
 
-Suivi (0.8.0, en cours) : `plans/<nom>/suivi.json`, hors git, tient l'état du plan et de ses runs ; seul `scripts/suivi.mjs` l'écrit, avec la vue SUIVI.md (contrat `orchestre-suivi/1`). Le workflow ne lance rien : chaque agent lance d'abord la commande d'étape que porte sa consigne, le premier agent du run l'ouvre, le scribe clôt la tâche, le greffier clôt le run. Sans `args.suivi`, le workflow garde le suivi de la 0.6.3.
+Suivi (0.8.0) : `plans/<nom>/suivi.json`, hors git, tient l'état du plan et de ses runs ; seul `scripts/suivi.mjs` l'écrit, avec la vue SUIVI.md (contrat `orchestre-suivi/1`). Le workflow ne lance rien : chaque agent lance d'abord la commande d'étape que porte sa consigne, le premier agent du run l'ouvre, le scribe clôt la tâche, le greffier clôt le run. Sans `args.suivi`, le workflow garde le suivi de la 0.6.3.
 
-Garde-fous : aucun agent ne pousse, ne fusionne dans `main` ni ne déploie ; aucun agent n'ouvre, ne restaure ni ne copie de données de production ou personnelles réelles (ces gestes reviennent à l'humain) ; un écart qui touche des données, une base, la prod ou un secret est toujours majeur ; aucun agent ne contourne une interdiction de lecture ou d'écriture, et le fichier concerné va en relecture humaine avant la PR ; un run interrompu ne se reprend pas, on en relance un nouveau, et les tâches déjà fusionnées sont sautées.
+Garde-fous : aucun agent ne pousse, ne fusionne dans `main` ni ne déploie ; aucun agent n'ouvre, ne restaure ni ne copie de données de production ou personnelles réelles (ces gestes reviennent à l'humain) ; un écart qui touche des données, une base, la prod ou un secret est toujours majeur ; aucun agent ne contourne une interdiction de lecture ou d'écriture, et le fichier concerné va en relecture humaine avant la PR ; aucun agent ne réécrit l'historique (rebase, reset) : une branche reprise reçoit la branche d'intégration par une fusion ; un worktree qui contient du travail non commité n'est jamais retiré ; un run interrompu ne se reprend pas, on en relance un nouveau, et les tâches déjà fusionnées sont sautées.
 
 ## Contenu du dépôt
 
@@ -176,12 +180,13 @@ plugins/orchestre/
 ├── skills/etat/                     /orchestre:etat
 ├── agents/                          les 9 agents du workflow
 ├── workflows/executer-phase.js      le workflow, un run par phase
-└── scripts/                         plan-lint.mjs (validation et compilation d'un plan), etat.mjs (/orchestre:etat), suivi.mjs (suivi.json et SUIVI.md)
+└── scripts/                         plan-lint.mjs (validation et compilation d'un plan), etat.mjs (/orchestre:etat), suivi.mjs (suivi.json et SUIVI.md), worktrees.mjs (nettoyage des worktrees)
 tests/
 ├── scenarios.mjs                    scénarios simulés du workflow
 ├── plan-lint.test.mjs               plan-lint sur des plans jouets
 ├── etat.test.mjs                    /orchestre:etat sur un dépôt jouet
 ├── suivi.test.mjs                   suivi.mjs dans des dépôts temporaires
+├── worktrees.test.mjs               worktrees.mjs dans des dépôts temporaires
 ├── modele.test.mjs                  modèle de réglages de l'installer
 └── depot-jouet.sh                   dépôt jouet pour un essai réel
 ```
@@ -189,7 +194,7 @@ tests/
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 82 scénarios du workflow, avec des agents simulés, dont 4 qui lancent le vrai `suivi.mjs` dans un dépôt temporaire ; 13 cas de plan-lint, 7 cas de `/orchestre:etat` et 17 cas de `suivi.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer.
+- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 15 cas de plan-lint, 7 de `/orchestre:etat`, 17 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer.
 - Validation : `npm run validate` (`claude plugin validate` sur le plugin et sur la marketplace).
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
 - Publier une version :

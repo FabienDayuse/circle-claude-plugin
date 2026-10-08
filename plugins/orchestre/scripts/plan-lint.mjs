@@ -1,11 +1,14 @@
 #!/usr/bin/env node
-// plan-lint (plugin orchestre v0.6) : valide un dossier de plan et le compile en JSON. Node 18 ou plus, aucune dépendance.
+// plan-lint (plugin orchestre 0.8.0) : valide un dossier de plan et le compile en JSON. Node 18 ou plus, aucune dépendance.
 // Usage : node <racine du plugin>/scripts/plan-lint.mjs <dossier-plan> [--json] [--phase N] [--integration <branche>] [--base <branche>]
 // Avec --integration, une tâche dont le commit de fusion « tâche <id> : » est sur la branche d'intégration, et pas sur la branche de base
 // (--base, sinon main, sinon master), compte comme fusionnée : git fait foi. La base écarte les fusions des plans précédents déjà dans main.
 // Une tâche « annulée » dans SUIVI.md compte comme faite : elle ne bloque ni sa phase ni les tâches qui en dépendent.
 // PREREQUIS.md (facultatif) : ce que le plan attend d'un humain ou de l'environnement. Une tâche cite les siens dans « prerequis » ;
 // tant que l'un d'eux est « ouvert », elle attend (prerequis_ouverts) et le reste de la phase peut tourner.
+// Avertissements (n'empêchent rien) : commandes de vérification ou de préparation composées, qu'un agent isolé dans un worktree
+// se verrait refuser par la garde d'isolement de Claude Code ; ressource de préparation partagée qu'aucune tâche ne déclare.
+// orchestre.config.json (facultatif) : preparation, liste de commandes ; preparation_partagee, { ressource : [commandes] }.
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -25,6 +28,21 @@ for (const [nom, b] of [["d'intégration", integ], ['de base', baseArg]]) if (b 
 if (!existsSync(join(dir, 'taches'))) { console.error(`dossier de tâches introuvable : ${join(dir, 'taches')}`); process.exit(2) }
 
 const arr = x => (Array.isArray(x) ? x : x ? [x] : [])
+// Commande composée : enchaînement ou sous-commande, cd/export/affectation en tête, code évalué en ligne par un interpréteur,
+// script en chemin absolu. Le texte entre guillemets ne compte pas, sauf une substitution entre guillemets doubles ; « \; » non plus.
+const sansGuillemets = c => c.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, '""')
+const sansApostrophes = c => c.replace(/'[^']*'/g, "''")
+const INTERPRETES = 'node|nodejs|deno|bun|tsx|ts-node|python[0-9.]*|ruby|perl|php|bash|sh|zsh|pwsh|powershell'
+const EN_LIGNE = new RegExp(`(^|[\\s/])(${INTERPRETES})\\s+(?:-{1,2}[\\w-]+\\s+)*(-e|-c|-p|-r|--eval|--print|-Command)\\s+["'\`]`)
+function composee(c) {
+  const s = String(c), nu = sansGuillemets(s).replace(/\\;/g, ''), raisons = []
+  if (/&&|\|\||;|\|/.test(nu) || /\$\(|`|<\(/.test(sansApostrophes(s))) raisons.push('enchaînement ou sous-commande')
+  if (/^\s*(cd|export)\s/.test(s) || /^\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s/.test(s)) raisons.push('cd, export ou affectation en tête')
+  if (EN_LIGNE.test(s) || /(^|\s)deno\s+eval\s/.test(s)) raisons.push('code évalué en ligne')
+  if (/(^|\s)\/[^\s'"]+\.(sh|bash|mjs|cjs|js|ts|py|rb|php|pl)(\s|$)/.test(sansGuillemets(s))) raisons.push('script en chemin absolu')
+  return raisons
+}
+const courte = c => (String(c).length > 100 ? String(c).slice(0, 99) + '…' : String(c))
 const fait = s => s === 'fusionnée' || s === 'annulée'
 function unquote(v) {
   v = v.trim()
@@ -105,7 +123,7 @@ function prerequis() {
   return liste
 }
 
-const erreurs = [], T = new Map(), tdir = join(dir, 'taches')
+const erreurs = [], avertissements = [], T = new Map(), tdir = join(dir, 'taches')
 for (const f of readdirSync(tdir).filter(f => f.endsWith('.md')).sort()) {
   const fm = frontmatter(readFileSync(join(tdir, f), 'utf8'))
   if (!fm || !fm.id) { erreurs.push(`${f} : frontmatter absent ou sans id`); continue }
@@ -189,8 +207,33 @@ const prereqs = [...PR.values()].map(x => ({ ...x, bloque: bloque(x.id) }))
 // Une décision reportée qu'aucune tâche restante ne cite ne bloquerait rien : un agent la trancherait à la place de l'humain
 for (const x of prereqs) if (x.type === 'décision' && x.statut === 'ouvert' && !x.bloque.length) erreurs.push(`prérequis ${x.id} : décision ouverte qu'aucune tâche restante ne cite dans « prerequis » (ajoute-la aux tâches qu'elle touche, ou passe-la à « abandonné »)`)
 const orphelins = prereqs.filter(x => x.type !== 'décision' && x.statut === 'ouvert' && !x.bloque.length)
+
+// Commandes de vérification des tâches restantes : composées, elles seraient refusées à un agent isolé dans un worktree
+const refusable = 'un agent isolé dans un worktree se la verra refuser (garde d\'isolement de Claude Code) : en faire une commande simple, ou un script du projet'
+for (const t of T.values()) if (!fait(st[t.id] || 'à-faire')) for (const c of arr(t.verification)) {
+  const r = composee(c)
+  if (r.length) avertissements.push(`${t.id} : vérification « ${courte(c)} » (${r.join(', ')}) : ${refusable}`)
+}
+// Préparation de l'environnement (orchestre.config.json) : forme, commandes simples, ressources déclarées par une tâche
+let config = null
+if (existsSync(join(dir, 'orchestre.config.json'))) {
+  try { config = JSON.parse(readFileSync(join(dir, 'orchestre.config.json'), 'utf8')) } catch (e) { erreurs.push(`orchestre.config.json illisible : ${e.message}`) }
+}
+const estListe = x => Array.isArray(x) && x.every(c => typeof c === 'string' && c.trim())
+if (config && config.preparation !== undefined) {
+  if (!estListe(config.preparation)) erreurs.push('orchestre.config.json : « preparation » doit être une liste de commandes')
+  else for (const c of config.preparation) { const r = composee(c); if (r.length) avertissements.push(`preparation : « ${courte(c)} » (${r.join(', ')}) : ${refusable}`) }
+}
+if (config && config.preparation_partagee !== undefined) {
+  const pp = config.preparation_partagee
+  if (!pp || typeof pp !== 'object' || Array.isArray(pp) || !Object.values(pp).every(estListe)) erreurs.push('orchestre.config.json : « preparation_partagee » doit associer à chaque ressource une liste de commandes')
+  else for (const [res, cs] of Object.entries(pp)) {
+    if (![...T.values()].some(t => arr(t.ressources).includes(res))) avertissements.push(`preparation_partagee : aucune tâche ne déclare la ressource « ${res} » ; ses commandes ne seront jamais lancées`)
+    for (const c of cs) { const r = composee(c); if (r.length) avertissements.push(`preparation_partagee (${res}) : « ${courte(c)} » (${r.join(', ')}) : ${refusable}`) }
+  }
+}
 const pretVu = pret.filter(p => phaseF == null || p.phase === phaseF)
-if (asJson) console.log(JSON.stringify({ ok: erreurs.length === 0, erreurs, taches, tous, phase_max, prerequis: prereqs, pret: pretVu }, null, 2))
+if (asJson) console.log(JSON.stringify({ ok: erreurs.length === 0, erreurs, avertissements, taches, tous, phase_max, prerequis: prereqs, pret: pretVu }, null, 2))
 else {
   if (erreurs.length) console.log(erreurs.map(e => '✗ ' + e).join('\n'))
   else {
@@ -217,4 +260,5 @@ else {
     }
   }
 }
+if (!asJson) for (const a of avertissements) console.log('⚠ ' + a)
 process.exit(erreurs.length ? 1 : 0)

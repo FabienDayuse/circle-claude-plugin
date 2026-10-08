@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Lecture du plan' }, { title: 'Tâches' }, { title: 'Clôture' }],
 }
 
-// Orchestrateur v0.6.2 (plugin orchestre)
+// Orchestrateur 0.8.0 (plugin orchestre)
 // args : { plan, phase, mode: 'auto'|'devia'|'phase', parallelisme, integration, base, decisions, corrections_max, escalade, decisions_office_max, arbitrages, relancer, lint, prefixe_agents, suivi }
 // base : branche d'où part la branche d'intégration (main par défaut, lu par plan-lint)
 // arbitrages : options choisies par l'utilisateur depuis le run précédent, [{ tache, titre, option }] ; le scribe les applique avant la lecture du plan
@@ -12,6 +12,11 @@ export const meta = {
 // suivi (0.8.0) : chemin de scripts/suivi.mjs, seul écrivain de suivi.json et de la vue SUIVI.md (contrat orchestre-suivi/1).
 //   Le workflow ne lance rien : il écrit dans la consigne de ses agents la commande à lancer, et lit son résultat dans suivi_ok.
 //   Sans suivi : suivi de la 0.6.3, le scribe édite SUIVI.md lui-même.
+// preparation (0.8.0) : commandes du projet qui remettent un dossier de travail à jour (dépendances, code généré), tirées de
+//   orchestre.config.json par /orchestre:lancer ; lancées par chaque worker après sa branche, et par l'intégrateur entre la fusion
+//   et le contrôle post-fusion. Le plugin ne connaît aucune stack : il lance ce que le projet déclare.
+// preparation_partagee : { <ressource> : [commandes] } pour un service commun (base de test) ; lancées seulement par les agents
+//   d'une tâche qui déclare cette ressource, donc sous son verrou : deux tâches ne préparent jamais la même base en même temps.
 const A = args || {}
 const PLAN = A.plan
 const PHASE = Number(A.phase)
@@ -38,6 +43,14 @@ const PLANARG = /\s/.test(PLAN || '') ? `"${PLAN}"` : PLAN
 // Une seule commande, sans heredoc ni pipe : la règle Bash(node <suivi.mjs> *) suffit
 const enShell = x => `'${JSON.stringify(x).replace(/'/g, '\\u0027').replace(/`/g, '\\u0060').replace(/\$/g, '\\u0024')}'`
 const cmdSuivi = (cmd, E) => `${SUIVICMD} ${cmd} ${PLANARG} --json ${enShell(E)}`
+// Nettoyage des worktrees des essais précédents, par le greffier en fin de run : scripts/worktrees.mjs, à côté de suivi.mjs
+const WORKTREES = SUIVI && SUIVI.replace(/suivi\.mjs$/, 'worktrees.mjs')
+const WTCMD = WORKTREES && (/\s/.test(WORKTREES) ? `node "${WORKTREES}"` : `node ${WORKTREES}`)
+// Préparation de l'environnement (voir args) : commandes du projet, chaînes non vides
+const commandes = x => (Array.isArray(x) ? x : []).filter(c => typeof c === 'string' && c.trim())
+const PREP = commandes(A.preparation)
+const PREP_PART = Object.fromEntries(Object.entries(A.preparation_partagee && typeof A.preparation_partagee === 'object' && !Array.isArray(A.preparation_partagee) ? A.preparation_partagee : {}).map(([r, c]) => [r, commandes(c)]).filter(([, c]) => c.length))
+const prepDe = t => [...PREP, ...(t.ressources || []).flatMap(r => PREP_PART[r] || [])]
 // Textes passés au suivi : sur une ligne, et coupés (extraits de commande de 30 lignes) ; HANDOFF.md garde le texte entier.
 // Une commande courte se recopie sans faute ; un retour à la ligne recopié tel quel casserait le JSON
 const uneLigne = x => String(x ?? '').replace(/\s+/g, ' ').trim()
@@ -68,7 +81,7 @@ const VERIF_S = S({ ok: bool, resultats: { type: 'array', items: RESULTAT_S }, e
 const EVAL_S = S({ verdict: { type: 'string', enum: ['ok', 'ko'] }, manques: strs, non_verifiables: strs, illisibles: strs, ...SUIVI_P }, ['verdict'])
 const INTEG_S = S({ ok: bool, fusionne: bool, controle_ok: bool, conflit: bool, commit: str, detail: str, ...SUIVI_P }, ['ok', 'fusionne'])
 const SCRIBE_S = S({ ok: bool, commit: str, refuses: { type: 'array', items: S({ id: str, raison: str }, ['id', 'raison']) }, ecartes: { type: 'array', items: S({ id: str, raison: str }, ['id', 'raison']) }, ...SUIVI_P, ouverture_ok: bool }, ['ok'])
-const GREFFIER_S = S({ suivi_ok: bool, suivi_erreur: str, commit: str, detail: str }, ['suivi_ok'])
+const GREFFIER_S = S({ suivi_ok: bool, suivi_erreur: str, commit: str, detail: str, worktrees: str }, ['suivi_ok'])
 // Avec le suivi, le résultat de la commande est requis quand il décide de la suite : ouverture (premier agent), clôture et arbitrage (scribe)
 const exiger = (schema, ...champs) => (SUIVI ? { ...schema, required: [...schema.required, ...champs] } : schema)
 const ENTREES_S = { type: 'array', items: S({ type: str, gravite: { type: 'string', enum: ['mineur', 'majeur'] }, description: str }, ['type', 'gravite', 'description']) }
@@ -112,10 +125,14 @@ const pOuverture = arret => `Suivi du plan : ta première commande, avant toute 
 // SUIVI.md régénéré par le script, juste avant le commit du scribe
 const pVue = (cmd, E, effet) => `
 - SUIVI.md : n'y touche jamais toi-même. Juste avant le commit, une fois tout le reste écrit, lance \`${cmdSuivi(cmd, E)}\`, telle quelle, une seule fois : ${effet}. ${rendreSuivi} Si elle échoue, commite quand même les autres fichiers.`
-// Branche d'une tâche : neuve, ou reprise de la plus récente (une branche tenue par un autre worktree ne se reprend pas, on en part)
-const pBranche = t => `Branche : si aucune branche \`tache/${t.id}\` n'existe, crée-la avec \`git switch -c tache/${t.id}\`. Sinon (tentative précédente), reprends le travail le plus récent : \`git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/heads/tache/${t.id} 'refs/heads/tache/${t.id}-r*'\` donne en premier la branche la plus récente ; si aucun worktree ne l'utilise (\`git worktree list\`), place-toi dessus avec \`git switch <branche>\`, sinon crée à partir d'elle \`tache/${t.id}-r<n>\`, avec le premier n libre à partir de 2 (\`git switch -c tache/${t.id}-r<n> <branche>\`). Commite tout ton travail sur la branche où tu es et rends son nom exact dans « branche ».`
+// Branche d'une tâche : neuve, ou reprise de la plus récente (une branche tenue par un autre worktree ne se reprend pas, on en part).
+// Une branche reprise est remise à jour par une fusion de la branche d'intégration, jamais par un rebase (classé destructif)
+const pBranche = t => `Branche : si aucune branche \`tache/${t.id}\` n'existe, crée-la avec \`git switch -c tache/${t.id}\`. Sinon (tentative précédente), reprends le travail le plus récent : \`git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/heads/tache/${t.id} 'refs/heads/tache/${t.id}-r*'\` donne en premier la branche la plus récente ; si aucun worktree ne l'utilise (\`git worktree list\`), place-toi dessus avec \`git switch <branche>\`, sinon crée à partir d'elle \`tache/${t.id}-r<n>\`, avec le premier n libre à partir de 2 (\`git switch -c tache/${t.id}-r<n> <branche>\`). Branche reprise : si \`git merge-base --is-ancestor ${INTEG} HEAD\` sort en code 1, elle ne contient pas les dernières fusions ; mets-la à jour avec \`git merge --no-edit ${INTEG}\`. Un conflit dans tes fichiers possédés se résout ; ailleurs, \`git merge --abort\` et statut blocked. Jamais de rebase ni de reset. Commite tout ton travail sur la branche où tu es et rends son nom exact dans « branche ».`
+// Préparation de l'environnement, déclarée par le projet ; une commande en échec ne s'interrompt pas en silence
+const pPrep = (t, quand, siEchec) => { const c = prepDe(t); return c.length ? `
+Préparation de l'environnement, ${quand} : lance une à une, telles quelles, ces commandes du projet : ${c.map(x => '`' + x + '`').join(', ')}. ${siEchec}` : '' }
 const pWorker = (t, isole) => `${pEtape(t.id, 'worker', { isole: !!isole })}Tâche ${t.id} du plan ${PLAN}. Lis d'abord ${PLAN}/DISCOVERY.md et les décisions de ${PLAN}/HANDOFF.md, puis ${t.fichier}, et suis son « Prompt de lancement ».
-${isole ? 'Tu es dans un worktree isolé.' : `Tu es dans le checkout principal, sur ${INTEG}.`} ${pBranche(t)}
+${isole ? "Tu es dans un worktree isolé : la garde d'isolement de Claude Code n'y accepte que des commandes simples (voir tes règles)." : `Tu es dans le checkout principal, sur ${INTEG}.`} ${pBranche(t)}${pPrep(t, 'une fois sur ta branche, avant tout autre travail', "Si l'une échoue, continue, et décris l'échec (commande et extrait de sa sortie) dans un écart. Si elles modifient des fichiers suivis que tu ne possèdes pas, ne les commite pas et décris-le dans un écart.")}
 Décisions prises : ${JSON.stringify(decisionsRun())}.
 Un fichier que tes permissions t'interdisent de lire ou de modifier (réglages de l'organisation ou du projet) : ne contourne jamais l'interdiction, par aucune commande ni script ; décris la modification attendue dans un écart de type « relecture », l'humain la fera avant la PR.
 Lance les commandes de vérification de la tâche avant de rendre la main.
@@ -131,12 +148,13 @@ Pour chaque critère, cherche une preuve : fichier:ligne du diff, test qui le co
 const pCorr = (t, r, manques, refus) => `${pEtape(t.id, 'correction', { refus: refus && { ...refus, manques: courts(refus.manques) } })}Correction de la tâche ${t.id}. Travaille dans ${r.chemin}, sur la branche ${r.branche} : préfixe chaque commande par \`cd "${r.chemin}" &&\` et édite les fichiers par leur chemin absolu sous ce dossier. Relis ${t.fichier} et ${PLAN}/DISCOVERY.md.
 Manques à corriger :
 ${liste(manques)}
-Mêmes règles que la tâche : fichiers possédés seulement, commits sur ${r.branche}, rien dans les fichiers de suivi${SUIVI ? ' (la commande de suivi ci-dessus mise à part)' : ''}, ni fusion ni push. Relance les vérifications, puis rends le même format de rapport.${(r.ecarts || []).length ? `
+Mêmes règles que la tâche : fichiers possédés seulement, commits sur ${r.branche}, rien dans les fichiers de suivi${SUIVI ? ' (la commande de suivi ci-dessus mise à part)' : ''}, ni fusion dans une autre branche ni push.${prepDe(t).length ? ` Si ta correction change les dépendances ou ce qui se génère, relance d'abord, dans ce dossier, ces commandes de préparation du projet : ${prepDe(t).map(x => '\`' + x + '\`').join(', ')}.` : ''} Relance les vérifications, puis rends le même format de rapport.${(r.ecarts || []).length ? `
 Écarts déjà remontés aux essais précédents, gardés dans le suivi : ${JSON.stringify(r.ecarts)}. Ne les répète pas ; si ta correction en annule un, dis-le dans un écart.` : ''}${(r.decouvertes || []).length ? `
 Découvertes des essais précédents : ${JSON.stringify(r.decouvertes)}. Rends dans ton rapport la liste à jour : celles qui tiennent toujours, sans celles que ta correction rend fausses, plus les nouvelles.` : ''}`
 const pInteg = (t, r, isole, controle) => `${pEtape(t.id, 'fusion')}Fusionne la tâche ${t.id} dans le checkout principal : \`git switch ${INTEG}\`, puis \`git merge --no-ff ${r.branche} -m "tâche ${t.id} : ${t.titre}"\`.
 En cas de conflit : \`git merge --abort\`, puis rends ok=false, fusionne=false, conflit=true et les fichiers en cause.
-Sinon, rends fusionne=true, puis lance sur ${INTEG} cette commande de contrôle, sans pipe (ajoute \`; echo "code=$?"\`) : ${controle}. Rends controle_ok selon son code de sortie, un extrait utile dans detail en cas d'échec, et ok=true seulement si la fusion et le contrôle ont réussi.${isole ? `
+Sinon, rends fusionne=true.${pPrep(t, `sur ${INTEG}, après la fusion et avant le contrôle`, "Si l'une échoue, ne lance pas le contrôle : rends controle_ok=false, avec « préparation : » suivi de la commande et d'un extrait de sa sortie dans detail. Après elles, \`git status --porcelain\` doit être vide : une préparation ne modifie aucun fichier suivi et ne laisse aucun fichier non ignoré ; sinon, ne lance pas le contrôle et rends controle_ok=false, avec « préparation : fichiers modifiés » et leur liste dans detail.")}
+Puis lance sur ${INTEG} cette commande de contrôle, sans pipe (ajoute \`; echo "code=$?"\`) : ${controle}. Rends controle_ok selon son code de sortie, un extrait utile dans detail en cas d'échec, et ok=true seulement si la fusion et le contrôle ont réussi.${isole ? `
 Supprime ensuite le worktree : \`git worktree unlock "${r.chemin}"\` (ignore l'erreur), puis \`git worktree remove --force "${r.chemin}"\`. Garde la branche.` : ''}`
 const pReplan = (t, r, statut, manques, nonVerif, sensibles = []) => `Replanification après ${t.id} (statut : ${statut}, phase ${PHASE}${DERNIERE ? ', dernière phase du plan' : ''}, mode ${MODE}). Tâche : ${t.fichier} ; son code est sur la branche ${r.branche}${statut === 'fusionnée' ? `, fusionnée dans ${INTEG} (checkout principal)` : `, dans ${r.chemin}`}. Écarts remontés : ${JSON.stringify(r.ecarts || [])}. Manques : ${JSON.stringify(manques)}. Critères non vérifiables dans le contexte de la tâche : ${JSON.stringify(nonVerif || [])}.${sensibles.length ? ` Écarts sensibles (données, base, prod, secret), majeurs d'office : rends un point pour chacun, sauf pour un écart qui ne porte que sur un fichier interdit aux agents (voir plus bas) : ${JSON.stringify(sensibles)}.` : ''}
 Lis ${PLAN}/SUIVI.md, les décisions de ${PLAN}/HANDOFF.md, ${PLAN}/PREREQUIS.md s'il existe, et les tâches restantes de ${PLAN}/taches/. Classe chaque écart mineur ou majeur selon ta grille et rends une entrée par écart, sauf pour ceux que tu rends dans « relectures ».
@@ -185,7 +203,8 @@ const pGreffier = v => `Fin du run : phase ${PHASE} du plan ${PLAN}, statut « $
 1. \`git switch ${INTEG}\`.
 2. \`${cmdSuivi('fin-run', bilanSuivi(v))}\`, telle quelle, une seule fois. ${rendreSuivi}
 3. \`git diff --quiet HEAD -- ${PLAN}/SUIVI.md\` : s'il sort en code 1, SUIVI.md a changé : \`git commit -m "suivi : fin du run de la phase ${PHASE}" -- ${PLAN}/SUIVI.md\`, qui ne commite que ce fichier, et rends son hash dans commit. Sinon, pas de commit.
-Si le point 1 échoue, lance quand même le point 2, saute le point 3 et dis pourquoi dans detail. Si le commit échoue, dis pourquoi dans detail. Sinon, laisse detail vide. Ne lance rien d'autre et ne modifie aucun autre fichier.`
+4. \`${WTCMD} nettoyer ${PLANARG}\` : il retire les worktrees propres que les tâches du plan ont laissés (branches gardées). Rends sa sortie, ou son message d'erreur, dans worktrees.
+Si le point 1 échoue, lance quand même le point 2, saute les points 3 et 4 et dis pourquoi dans detail. Si le commit échoue, dis pourquoi dans detail. Sinon, laisse detail vide. Ne lance rien d'autre et ne modifie aucun autre fichier.`
 
 // État du run
 let arret = null
@@ -208,6 +227,7 @@ const pointHumain = (id, titre, contexte, options = []) => ({ tache: id, titre, 
 const decisionsRun = () => [...DECISIONS, ...ARB.map(a => `${a.titre} : ${a.option.description} (arbitré par l'utilisateur)`), ...office.map(o => `${o.titre} : ${o.description} (prise d'office)`)]
 
 // Toute sortie après l'ouverture du run passe par finir : le greffier clôt le run dans le suivi (fin-run)
+let worktrees = null
 async function finir(v) {
   if (SUIVI && ouvert) {
     // Un greffier qui lève ne doit pas faire perdre le bilan : points à trancher et actions ne vivent que dans la valeur de retour
@@ -217,9 +237,10 @@ async function finir(v) {
     else if (g) {
       noterSuivi(null, 'fin-run', g)
       if (g.detail) suiviEchecs.push({ tache: null, etape: 'fin-run', erreur: `SUIVI.md non commité : ${g.detail}` })
+      if (g.worktrees) worktrees = g.worktrees
     }
   }
-  return SUIVI ? { ...v, suivi_echecs: suiviEchecs } : v
+  return SUIVI ? { ...v, suivi_echecs: suiviEchecs, ...(worktrees ? { worktrees } : {}) } : v
 }
 // Ouverture refusée par le script (verrou, SUIVI.md ou suivi.json illisible…) : toutes les écritures suivantes échoueraient, rien ne part
 const nonOuvert = x => {
@@ -424,7 +445,7 @@ async function executer(t, isole) {
     if (!(i.fusionne ?? i.ok)) return await clore(t, 'bloquée', essais, r, [`fusion : ${i.detail || 'échec'}`], trace)
     if (!(i.controle_ok ?? i.ok)) {
       // Fusion faite mais contrôle en échec : la tâche reste fusionnée et le run s'arrête pour un humain
-      const detail = `contrôle post-fusion en échec sur ${INTEG} (${controle}) : ${i.detail || 'échec'}`
+      const detail = `${prepDe(t).length ? 'préparation ou ' : ''}contrôle post-fusion en échec sur ${INTEG} (${controle}) : ${i.detail || 'échec'}`
       trace.entrees = [{ type: 'besoin-humain', gravite: 'majeur', description: detail }]
       arreter({ tache: t.id, titre: `Contrôle post-fusion en échec après ${t.id}`, contexte: detail, humain: true, options: [{ id: 'reparer', description: `Réparer sur ${INTEG}, rejouer les vérifications, puis relancer la phase`, impact: '', recommande: true }, { id: 'arreter', description: 'Arrêter le plan ici', impact: '', recommande: false }] }, trace.points)
     }

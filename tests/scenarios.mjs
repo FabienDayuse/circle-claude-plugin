@@ -872,8 +872,11 @@ async function joue(nom, D, q, args = {}) {
     const v = v0 && typeof v0 === 'object' && 'avant' in v0 ? (v0.avant(), v0.rep) : v0
     const codes = cs.map(c => { const r = spawnSync('sh', ['-c', c], { cwd: D.racine, encoding: 'utf8' }); lances.push({ label: k, code: r.status, out: r.stdout.trim(), err: r.stderr.trim() }); return r.status })
     const rep = typeof v === 'function' ? v(prompt, opts) : v
+    // Le greffier lance aussi le nettoyage des worktrees : sa dernière ligne va dans « worktrees »
+    const wt = [...prompt.matchAll(/`(node "?[^`"]*worktrees\.mjs"? nettoyer [^`]*)`/g)].map(m => m[1])
+    const nettoyage = wt.map(c => { const r = spawnSync('sh', ['-c', c], { cwd: D.racine, encoding: 'utf8' }); lances.push({ label: k, code: r.status, out: r.stdout.trim(), err: r.stderr.trim() }); return r.stdout.trim() || r.stderr.trim() }).pop()
     if (!cs.length) return rep
-    return { ...rep, ...(cs[0].includes('suivi.mjs" debut-run') || cs[0].includes('suivi.mjs debut-run') ? { ouverture_ok: codes[0] === 0 } : {}), suivi_ok: codes[codes.length - 1] === 0 }
+    return { ...rep, ...(cs[0].includes('suivi.mjs" debut-run') || cs[0].includes('suivi.mjs debut-run') ? { ouverture_ok: codes[0] === 0 } : {}), suivi_ok: codes[codes.length - 1] === 0, ...(nettoyage ? { worktrees: nettoyage } : {}) }
   }
   dernier = null
   const res = await run({ ...ARGS, suivi: SUIVI_VRAI, ...args }, agent, () => {}, () => {})
@@ -892,7 +895,7 @@ await cas('V11 : vrai suivi.mjs — T00 fusionnée après un refus, T01 bloquée
       'T01 · worker': [{ statut: 'blocked', resume: 'bloqué', branche: 'tache/T01', chemin: D.racine, blocage: 'schéma ambigu' }], 'T01 · replanification': [RIEN], 'T01 · suivi': [SOK],
       'fin de run · suivi': [{ commit: '', detail: '' }] })
     assert.deepEqual(lances.filter(l => l.code !== 0), [], 'toutes les commandes de suivi passent')
-    assert.equal(lances.length, 14)
+    assert.equal(lances.length, 15, '14 commandes de suivi et le nettoyage des worktrees')
     assert.equal(res.statut, 'partiel'); assert.deepEqual(res.suivi_echecs, [])
     const doc = D.doc(), t = id => doc.taches.find(x => x.id === id)
     assert.deepEqual(doc.runs.map(r => [r.numero, r.statut, r.phase, r.mode, r.parallelisme, r.fin !== null]), [[1, 'partiel', 1, 'phase', 4, true]])
@@ -903,7 +906,8 @@ await cas('V11 : vrai suivi.mjs — T00 fusionnée après un refus, T01 bloquée
     assert.deepEqual(doc.journal.filter(e => e.tache === 'T01').map(e => e.texte), ['T01 démarre (checkout principal)', 'T01 : suivi', 'T01 : replanification terminée', 'T01 : bloquée (1 essai) — schéma ambigu'])
     assert.match(D.ligne('T00'), /\| fusionnée \| 2 +\| tache\/T00 \| 1,0 M \/ voir \/workflows \|$/)
     assert.match(D.ligne('T01'), /\| bloquée +\| 1 +\| tache\/T01 \|/)
-    assert.equal(lances[lances.length - 1].out, 'suivi : run 1 partiel', 'rien à commiter pour le greffier')
+    assert.equal(lances.find(l => l.label === 'fin de run · suivi').out, 'suivi : run 1 partiel', 'rien à commiter pour le greffier')
+    assert.equal(lances[lances.length - 1].out, 'worktrees plans/p : 0 retiré, 0 gardé')
     assert.equal(spawnSync(process.execPath, [SUIVI_VRAI, 'valider', 'plans/p'], { cwd: D.racine }).status, 0)
   } finally { fs.rmSync(D.racine, { recursive: true, force: true }) }
 })
@@ -945,7 +949,7 @@ await cas("V14 : vrai suivi.mjs — clôture complète en autonome (décision d'
       'arbitrage T00 · suivi': [SOK], 'lecteur-plan': [plan({ ...T0, statut: 'fusionnée' })], 'fin de run · suivi': [{ commit: '', detail: '' }] },
       { arbitrages: [{ tache: 'T00', titre: 'Deux recos', option: P2.options[0] }] })
     assert.deepEqual(run2.lances.filter(l => l.code !== 0), [])
-    assert.deepEqual(run2.lances.map(l => l.out.split(' ;')[0]), ['suivi : run 2 ouvert (phase 1, mode phase)', 'suivi : arbitrage T00 option A', 'suivi : run 2 terminé'])
+    assert.deepEqual(run2.lances.map(l => l.out.split(' ;')[0]), ['suivi : run 2 ouvert (phase 1, mode phase)', 'suivi : arbitrage T00 option A', 'suivi : run 2 terminé', 'worktrees plans/p : 0 retiré, 0 gardé'])
     doc = D.doc()
     assert.deepEqual([doc.points[0].statut, doc.points[0].option_choisie], ['tranché', 'A'])
     assert.deepEqual(doc.runs.map(r => [r.numero, r.statut]), [[1, 'arbitrage'], [2, 'terminé']])
@@ -963,5 +967,67 @@ await cas("V15 : vrai suivi.mjs — tâche ajoutée par un arbitrage gardée dan
     assert.deepEqual(doc.runs[0].taches_ajoutees, [{ id: 'T00D', phase: 1, titre: 'Test du contrat' }])
     assert.deepEqual(doc.taches.find(x => x.id === 'T00D').ajoutee_par, 'T00')
   } finally { fs.rmSync(D.racine, { recursive: true, force: true }) }
+})
+// ——— Lot A (0.8.0) : environnement des dossiers de travail, reprise de branche, nettoyage des worktrees ———
+const PREP = { preparation: ['pnpm install --frozen-lockfile', 'pnpm prisma generate'], preparation_partagee: { 'base-test': ['pnpm db:test:prepare'], inutilisee: ['make x'] } }
+await cas('A1 : préparation lancée par chaque worker sur sa branche et par l’intégrateur avant le contrôle ; partagée seulement sous la ressource déclarée', async () => {
+  const TB = { ...T00, ressources: ['base-test'] }, TS = { ...T01, depend_de: [], ressources: [] }
+  const { res, calls, q } = await scenario('A1', { 'lecteur-plan': [plan(TB, TS)], ...t00(), 'T00 · suivi': [SOK], 'T01 · worker': [rap(1, { branche: 'tache/T01', chemin: '/wt/T01' })], 'T01 · vérification': [ok(2)], 'T01 · évaluation': [{ verdict: 'ok' }], 'T01 · fusion': [FOK], 'T01 · suivi': [SOK] }, PREP)
+  assert.equal(res.statut, 'terminé')
+  const w0 = byLabel(calls, 'T00 · worker')[0].prompt, w1 = byLabel(calls, 'T01 · worker')[0].prompt
+  assert.ok(w0.includes('Préparation de l\'environnement, une fois sur ta branche, avant tout autre travail : lance une à une, telles quelles, ces commandes du projet : `pnpm install --frozen-lockfile`, `pnpm prisma generate`, `pnpm db:test:prepare`.'))
+  assert.ok(w1.includes('ces commandes du projet : `pnpm install --frozen-lockfile`, `pnpm prisma generate`.'), 'T01 ne déclare pas base-test')
+  assert.ok(w0.indexOf('Préparation') > w0.indexOf('Branche :'), 'après la branche')
+  assert.ok(!w0.includes('make x') && !w1.includes('make x'))
+  const f0 = byLabel(calls, 'T00 · fusion')[0].prompt
+  assert.ok(f0.indexOf('`pnpm db:test:prepare`') > f0.indexOf('rends fusionne=true') && f0.indexOf('`pnpm db:test:prepare`') < f0.indexOf('cette commande de contrôle'), 'intégrateur : entre la fusion et le contrôle')
+  assert.ok(f0.includes('ne lance pas le contrôle : rends controle_ok=false'))
+  assert.ok(!byLabel(calls, 'T01 · fusion')[0].prompt.includes('db:test:prepare'))
+  assert.ok(!byLabel(calls, 'T00 · vérification')[0].prompt.includes('Préparation'), 'le vérificateur ne prépare rien')
+  vide('A1', q)
+})
+await cas('A2 : sans préparation, ou mal formée, aucune consigne ; reprise de branche par fusion, jamais de rebase ; garde rappelée au seul worker isolé', async () => {
+  let { calls, q } = await scenario('A2', { 'lecteur-plan': [plan(T00)], ...t00(), 'T00 · suivi': [SOK] }, { preparation: 'pnpm install', preparation_partagee: [['x']] })
+  const w = byLabel(calls, 'T00 · worker')[0].prompt
+  assert.ok(calls.every(c => !c.prompt.includes('Préparation de l\'environnement')))
+  for (const x of ['git merge-base --is-ancestor plan/p HEAD', 'git merge --no-edit plan/p', 'git merge --abort', 'Jamais de rebase ni de reset']) assert.ok(w.includes(x), 'reprise : ' + x)
+  assert.ok(!w.includes("garde d'isolement"), 'checkout principal : pas de garde')
+  vide('A2', q)
+  const T02 = { ...T00, id: 'T02', titre: 'Autre', fichier: 'plans/p/taches/T02.md', ressources: [] }, T03 = { ...T02, id: 'T03', fichier: 'plans/p/taches/T03.md' }
+  const tt = id => ({ [`${id} · worker`]: [rap(id, { branche: `tache/${id}`, chemin: `/wt/${id}` })], [`${id} · vérification`]: [ok(id)], [`${id} · évaluation`]: [{ verdict: 'ok' }], [`${id} · fusion`]: [FOK], [`${id} · suivi`]: [SOK] })
+  ;({ calls, q } = await scenario('A2b', { 'lecteur-plan': [plan(T02, T03)], ...tt('T02'), ...tt('T03') }))
+  assert.ok(byLabel(calls, 'T02 · worker')[0].prompt.includes("Tu es dans un worktree isolé : la garde d'isolement de Claude Code n'y accepte que des commandes simples"))
+  vide('A2b', q)
+})
+await cas('A3 : le greffier nettoie les worktrees après le commit de SUIVI.md ; sa ligne revient au pilote', async () => {
+  const { res, calls, q } = await scenario('A3', { 'lecteur-plan': [planS(T00)], ...s00(), 'fin de run · suivi': [{ ...GOK, worktrees: 'worktrees plans/p : 1 retiré, 0 gardé' }] }, AS)
+  assert.equal(res.worktrees, 'worktrees plans/p : 1 retiré, 0 gardé')
+  const g = byLabel(calls, 'fin de run · suivi')[0]
+  assert.ok(g.prompt.includes('4. `node /plug/scripts/worktrees.mjs nettoyer plans/p`') && g.prompt.indexOf('worktrees.mjs') > g.prompt.indexOf('git commit'))
+  assert.ok(g.prompt.includes('saute les points 3 et 4'))
+  assert.ok('worktrees' in g.opts.schema.properties)
+  vide('A3', q)
+})
+await cas('A4 : vrai worktrees.mjs — en fin de run, le worktree propre d’un essai précédent est retiré, sa branche gardée', async () => {
+  const D = depotJouet()
+  try {
+    const W = join(D.racine, '..', `wt-${process.pid}`)
+    D.git('worktree', 'add', '-q', '-b', 'tache/T01', W, 'plan/p')
+    const r = await joue('A4', D, { 'lecteur-plan': [plan(T0)], 'T00 · worker': [rap(0)], 'T00 · vérification': [ok(1)], 'T00 · évaluation': [{ verdict: 'ok' }], 'T00 · fusion': [FOK], 'T00 · suivi': [SOK], 'fin de run · suivi': [{ commit: '', detail: '' }] })
+    assert.deepEqual(r.lances.filter(l => l.code !== 0), [])
+    assert.match(r.res.worktrees, /^retiré tache\/T01 \(.*\), branche gardée\nworktrees plans\/p : 1 retiré, 0 gardé$/)
+    assert.ok(!fs.existsSync(W))
+    assert.ok(D.git('branch', '--list', 'tache/T01').includes('tache/T01'), 'branche gardée')
+  } finally { fs.rmSync(D.racine, { recursive: true, force: true }) }
+})
+await cas('A5 : correction — la préparation se relance si besoin ; intégrateur — rien de modifié après la préparation ; arrêt qui la nomme', async () => {
+  const TB = { ...T00, ressources: ['base-test'] }
+  const { res, calls, q } = await scenario('A5', { 'lecteur-plan': [plan(TB)], 'T00 · worker': [rap(0)], 'T00 · vérification': [ok(1), ok(2)], 'T00 · évaluation': [{ verdict: 'ko', manques: ['M1'] }, { verdict: 'ok' }], 'T00 · correction 1': [rap(1)], 'T00 · fusion': [{ ok: false, fusionne: true, controle_ok: false, detail: 'préparation : fichiers modifiés src/generated/client.ts' }], 'T00 · suivi': [SOK] }, PREP)
+  const c = byLabel(calls, 'T00 · correction 1')[0].prompt
+  assert.ok(c.includes('Si ta correction change les dépendances ou ce qui se génère, relance d’abord'.replace('’', "'")) && c.includes('`pnpm db:test:prepare`'))
+  const f = byLabel(calls, 'T00 · fusion')[0].prompt
+  assert.ok(f.includes('`git status --porcelain` doit être vide') && f.includes('« préparation : fichiers modifiés »'))
+  assert.equal(res.statut, 'arbitrage'); assert.ok(res.arbitrage.contexte.startsWith('préparation ou contrôle post-fusion en échec sur plan/p'))
+  vide('A5', q)
 })
 console.log(`TOUT EST VERT (${n} cas)`)

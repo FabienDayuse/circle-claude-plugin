@@ -2,9 +2,11 @@
 
 Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
 
-## 0.8.0 — en cours, non publiée : suivi dynamique
+## 0.8.0 — 08/10/2026 : suivi dynamique et environnement des worktrees
 
-Le numéro de version du plugin reste 0.6.3 tant que la 0.8.0 n'est pas finie. Contrat `orchestre-suivi/1` et choix tranchés le 05/10 : dossier `0.8.0/` du dossier de travail (CONTRAT.md, ECARTS.md).
+Elle part de la 0.6.3 : il n'y a ni 0.6.4 ni 0.7.0. Deux volets : le suivi dynamique (`suivi.json`), et les correctifs tirés d'un projet réel mené en 0.6.3 (MonitIA), qui ralentissaient le plus le flux : environnement des dossiers de travail périmé, branches tenues par les worktrees des essais précédents, commandes refusées par la garde d'isolement des worktrees de Claude Code, scratchpad commun. Contrat `orchestre-suivi/1`, choix tranchés et retours du projet : dossier `0.8.0/` du dossier de travail (CONTRAT.md, ECARTS.md, RETOURS-monitia.md).
+
+### Suivi dynamique
 
 - `scripts/suivi.mjs` : seul écrivain de `plans/<nom>/suivi.json` (hors git, par `.git/info/exclude`) et de la vue SUIVI.md, dont il ne régénère que le tableau. Node 18, aucune dépendance. Commandes `debut-run`, `etape`, `cloture`, `arbitrage`, `fin-run`, `pilote`, `vue`, `etat`, `valider` ; l'objet JSON sur l'entrée standard ou dans `--json '<objet>'`. Verrou, fichier temporaire renommé, validation de chaque écriture (refus : code 1, fichiers intacts). Un `suivi.json` perdu se reconstruit depuis SUIVI.md, HANDOFF.md et plan-lint.
 - Branché dans le workflow, par `args.suivi` (le chemin du script, passé par `/orchestre:lancer`). Le workflow ne lance rien : il écrit dans la consigne de chaque agent la commande à lancer, en une ligne (objet JSON entre guillemets simples, apostrophe, accent grave et dollar en échappements `\u`), et lit son résultat dans `suivi_ok`. Les textes passés au suivi tiennent sur une ligne et sont coupés à 240 caractères (extraits de commande) ; HANDOFF.md garde le texte entier.
@@ -21,7 +23,34 @@ Le numéro de version du plugin reste 0.6.3 tant que la 0.8.0 n'est pas finie. C
 - `/orchestre:installer` : ajoute la règle du suivi avec celle de plan-lint ; `/orchestre:pret` la contrôle.
 - Agents : une règle commune pour la commande de suivi (la lancer telle quelle, une seule fois, et rendre son résultat ; elle n'écrit que le suivi, hors git ; refusée ou en échec, elle ne compte nulle part ailleurs). Le workflow écarte aussi une commande de suivi citée parmi les commandes refusées au vérificateur.
 - Tests : 15 scénarios du workflow avec le suivi, dont 4 qui lancent le vrai `suivi.mjs` dans un dépôt temporaire (refus et blocage, exception, clôture complète puis arbitrage, tâche ajoutée par un arbitrage) ; 17 cas pour `suivi.mjs`.
-- Pas encore vérifié sur le Mac : la règle d'autorisation avec une commande qui porte un long JSON, l'écriture dans le checkout principal depuis un worktree isolé, le coût des appels de suivi par tâche (donnée à collecter). `/orchestre:etat` reste en place.
+- `/orchestre:etat` reste en place ; `suivi.mjs etat` en donne le même contenu, plus l'étape de chaque tâche pendant un run.
+
+### Environnement des dossiers de travail
+
+- Préparation de l'environnement, déclarée par le projet dans `orchestre.config.json` (le plugin ne connaît aucune stack) :
+  - `preparation` : commandes qui remettent un dossier de travail à jour (dépendances, code généré). Chaque worker les lance sur sa branche, avant tout autre travail ; l'intégrateur, entre la fusion et le contrôle post-fusion, et `git status` doit rester vide après elles ; une correction les relance si elle touche aux dépendances ou au code généré. Sur MonitIA, le contrôle post-fusion échouait sur du code généré périmé à chaque fusion d'une migration (5 arrêts dans une phase), et un worker isolé testait sur une base de test non préparée.
+  - `preparation_partagee` : `{ "<ressource>": [commandes] }` pour un service commun (base de test) ; lancées seulement par les agents d'une tâche qui déclare cette ressource, donc jamais deux à la fois.
+  - `/orchestre:pret` les propose d'après le dépôt et les essaie ; `/orchestre:preparer` les écrit dans un plan neuf ; `/orchestre:lancer` les passe au workflow et signale leur absence ; plan-lint vérifie leur forme.
+- Worktrees des essais précédents : nouveau script `scripts/worktrees.mjs nettoyer`. Il retire les worktrees propres des tâches du plan (sans `--force`, verrou levé, branche gardée), garde et signale ceux qui ont du travail non commité, ne touche ni au checkout principal ni au dossier d'où il est lancé, et refuse tant que `suivi.json` note un run en cours (`--run-arrete` après confirmation). Le greffier le lance en fin de run, `/orchestre:lancer` au pré-vol. Sur MonitIA, 24 worktrees tenaient les branches de 17 tâches, d'où des branches `-r2` à `-r4`.
+- Reprise d'une branche : remise à jour par `git merge --no-edit <intégration>` (vérifiée par `git merge-base --is-ancestor`), jamais par un rebase, que le classifieur du mode auto refuse (« Git Destructive »). Nouvelle autorisation `Bash(git merge-base *)` dans le modèle de l'installeur.
+- Garde d'isolement des worktrees (Claude Code) : elle refuse aux agents isolés toute commande qu'elle ne peut pas prouver confinée au worktree (321 refus sur MonitIA). worker-isole reçoit des règles de commandes simples : pas de `cd`, d'`export` ni d'affectation en tête, pas d'enchaînement ni de sous-commande, pas de code évalué en ligne ni de script jetable hors du worktree, pas de `; echo $?` (le code de sortie est dans le résultat de l'outil), pas de filtre sur une sortie d'échec ; une commande refusée se découpe, elle ne se contourne pas.
+- `/orchestre:installer` : si un outil du projet est introuvable dans le shell des agents, propose une clé `env` (PATH) dans `.claude/settings.local.json`. Sur MonitIA, Node hors du PATH faisait préfixer chaque commande par `export PATH=…`, que la garde refuse.
+- plan-lint : avertissements (non bloquants) sur les commandes de vérification et de préparation composées, à évaluation en ligne ou en chemin absolu, et sur une ressource de préparation qu'aucune tâche ne déclare ; champ `avertissements` du JSON.
+- Fichiers temporaires des workers dans `<scratchpad>/<id>/`, jamais dans le dépôt ; un worker ne lance pas un fichier écrit par un autre. Sur MonitIA, un worker avait lancé le script d'un autre, qui a modifié un troisième worktree.
+- Workers : jamais de rebase, de reset ni de réécriture d'historique.
+
+### Mettre à jour depuis la 0.6.3
+
+1. `/plugin marketplace update circle`, puis `/reload-plugins` ou une session neuve.
+2. Dans chaque dépôt : `/orchestre:installer` (règles de `suivi.mjs` et `worktrees.mjs`, `git merge-base`, clé `env` si besoin), puis une session neuve.
+3. Pour chaque plan : `/orchestre:pret plans/<nom>` (préparation de l'environnement, vérifications composées).
+4. `/orchestre:lancer plans/<nom>` : au pré-vol, il retire les worktrees propres des essais précédents et régénère le tableau de SUIVI.md, à commiter une fois.
+
+### Pas encore vérifié en réel
+
+- La garde d'isolement accepte-t-elle les commandes de suivi (`node <suivi.mjs> etape … --json '…'`), un `git merge-base` ou un script du projet lancé depuis le worktree ?
+- L'écriture de `suivi.json` dans le checkout principal depuis un worktree isolé.
+- Le coût des appels de suivi et de la préparation par tâche : donnée à collecter.
 
 ## 0.6.3 — 29/09/2026 : état du plan
 
