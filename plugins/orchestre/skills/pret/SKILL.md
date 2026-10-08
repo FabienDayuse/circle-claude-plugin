@@ -27,7 +27,7 @@ plan-lint, dans ce plugin : `node ${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs`.
 Relève chaque point sans t'arrêter : ils vont au verdict.
 
 1. `claude --version` : 2.1.271 ou plus. `node --version` : 18 ou plus. Les agents `orchestre:*` figurent parmi les types d'agents disponibles.
-2. Réglages : `worktree.baseRef: "head"`, `autoContinueAtUsageLimit`, `git push` et l'outil de déploiement refusés, règle `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs *)` dans `allow`. Ce qui manque relève de `/orchestre:installer`.
+2. Réglages : `worktree.baseRef: "head"`, `autoContinueAtUsageLimit`, `git push` et l'outil de déploiement refusés, règles `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/plan-lint.mjs *)` et `Bash(node ${CLAUDE_PLUGIN_ROOT}/scripts/suivi.mjs *)` dans `allow`. Ce qui manque relève de `/orchestre:installer`.
 3. `orchestre.config.json` : branche d'intégration et branche de base (`branche_base`, `main` par défaut). Git : aucune modification non commitée sur les fichiers suivis ; la branche d'intégration existe et le dossier du plan y est commité. Place-toi dessus maintenant : le plan n'existe que là. `.worktreeinclude` liste les `.env` s'il y en a.
 4. Dossiers non suivis (`git status --porcelain`) qu'un formateur ou un linter lancé sur tout le dépôt lirait dans le checkout principal : signale-les ; leur exclusion relève de `/orchestre:installer`.
 5. Mode de permission : en mode manuel, une commande de vérification non autorisée arrêtera le run sur une demande de permission. Liste celles qui ne sont pas autorisées.

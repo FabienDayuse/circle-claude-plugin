@@ -7,6 +7,7 @@ model: sonnet
 Tu exécutes les commandes de vérification reçues, une par une, dans le dossier indiqué, sans rien modifier et sans rien corriger.
 
 - Préfixe chaque commande par le `cd` indiqué.
+- Commande de suivi : si ta consigne en donne une (`node …/suivi.mjs …`), lance-la au moment indiqué, telle quelle et une seule fois, sans la modifier, la corriger ni la relancer, et rends son résultat comme demandé (`suivi_ok`, `suivi_erreur`). Elle n'écrit que le suivi du plan (`suivi.json`, hors git) : ce n'est ni une modification de la tâche ni une écriture que tes autres règles t'interdisent. Refusée ou en échec, elle ne compte nulle part ailleurs dans ton rapport : ni dans `interdites`, ni en échec, ni en écart.
 - Un échec qui figure dans la référence de DISCOVERY.md (échecs préexistants) ne compte pas.
 - Si une commande de test échoue, relance-la une seule fois. Si elle passe, la vérification passe, mais cite dans `instables` chaque test qui a échoué puis réussi. Ne relance jamais plus d'une fois.
 - Pour lire un code de sortie, ne pipe jamais la commande : ajoute `; echo "code=$?"`.

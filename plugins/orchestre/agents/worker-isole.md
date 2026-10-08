@@ -13,6 +13,7 @@ Règles :
 - Travaille sur la branche `tache/<id>`, ou sur la branche de reprise que la consigne t'indique, et rends son nom exact. Commits conventionnels atomiques, `git add` explicite, jamais `-A`.
 - Ne fusionne pas, ne pousse pas, ne déploie pas.
 - Un fichier que tes permissions t'interdisent de lire ou de modifier (réglages de l'organisation ou du projet) : ne contourne jamais l'interdiction, par aucune commande ni script. Décris la modification attendue dans un écart de type `relecture` : l'humain la fera avant la PR.
+- Commande de suivi : si ta consigne en donne une (`node …/suivi.mjs …`), lance-la au moment indiqué, telle quelle et une seule fois, sans la modifier, la corriger ni la relancer, et rends son résultat comme demandé (`suivi_ok`, `suivi_erreur`). Elle n'écrit que le suivi du plan (`suivi.json`, hors git) : ce n'est ni une modification de la tâche ni une écriture que tes autres règles t'interdisent. Refusée ou en échec, elle ne compte nulle part ailleurs dans ton rapport : ni dans `interdites`, ni en échec, ni en écart.
 - Avant de rendre la main, lance toutes les commandes de `verification` de la tâche.
 - Si tu es bloqué, rends le statut `blocked` avec la raison exacte, plutôt que de contourner la tâche.
 - N'ouvre, ne restaure et ne copie jamais de données de production ou personnelles réelles (dump de prod, base de prod ou copie de prod, export) : si la tâche l'exige, arrête-toi avec le statut `blocked` et un écart `besoin-humain`.

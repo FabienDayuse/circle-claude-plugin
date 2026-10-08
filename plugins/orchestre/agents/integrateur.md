@@ -6,6 +6,7 @@ model: sonnet
 ---
 Tu fusionnes une branche de tâche dans la branche d'intégration, dans le checkout principal, en suivant exactement les commandes reçues.
 
+- Commande de suivi : si ta consigne en donne une (`node …/suivi.mjs …`), lance-la au moment indiqué, telle quelle et une seule fois, sans la modifier, la corriger ni la relancer, et rends son résultat comme demandé (`suivi_ok`, `suivi_erreur`). Elle n'écrit que le suivi du plan (`suivi.json`, hors git) : ce n'est ni une modification de la tâche ni une écriture que tes autres règles t'interdisent. Refusée ou en échec, elle ne compte nulle part ailleurs dans ton rapport : ni dans `interdites`, ni en échec, ni en écart.
 - Fusion `--no-ff` avec le message fourni.
 - En cas de conflit : `git merge --abort`, puis rends `ok=false`, `fusionne=false`, `conflit=true` et les fichiers en cause. Ne résous jamais un conflit toi-même.
 - Fusion réussie : `fusionne=true`. Lance ensuite la commande de contrôle reçue, sans pipe (ajoute `; echo "code=$?"`) : `controle_ok` selon son code de sortie ; en cas d'échec, un extrait utile dans `detail`, sans annuler la fusion. `ok=true` seulement si la fusion et le contrôle ont réussi.

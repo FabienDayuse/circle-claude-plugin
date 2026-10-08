@@ -156,7 +156,10 @@ Un run égale une phase. Pour chaque tâche prête (dépendances fusionnées, pr
 | Corrections | `worker` | sonnet puis opus | 2 essais au plus sur les manques relevés |
 | Fusion | `integrateur` | sonnet | `--no-ff` dans `plan/<nom>`, puis contrôle post-fusion |
 | Replanification | `replanificateur` | opus | classe les écarts, prépare les points à trancher avec leurs options |
-| Suivi | `scribe` | sonnet | seul à écrire SUIVI, HANDOFF, DISCOVERY et les tâches créées ou amendées |
+| Suivi | `scribe` | sonnet | seul à écrire HANDOFF, DISCOVERY et les tâches créées ou amendées ; clôt la tâche par `suivi.mjs`, qui régénère SUIVI.md |
+| Fin de run | `greffier` | haiku | clôt le run par `suivi.mjs fin-run`, puis commite SUIVI.md s'il a changé |
+
+Suivi (0.8.0, en cours) : `plans/<nom>/suivi.json`, hors git, tient l'état du plan et de ses runs ; seul `scripts/suivi.mjs` l'écrit, avec la vue SUIVI.md (contrat `orchestre-suivi/1`). Le workflow ne lance rien : chaque agent lance d'abord la commande d'étape que porte sa consigne, le premier agent du run l'ouvre, le scribe clôt la tâche, le greffier clôt le run. Sans `args.suivi`, le workflow garde le suivi de la 0.6.3.
 
 Garde-fous : aucun agent ne pousse, ne fusionne dans `main` ni ne déploie ; aucun agent n'ouvre, ne restaure ni ne copie de données de production ou personnelles réelles (ces gestes reviennent à l'humain) ; un écart qui touche des données, une base, la prod ou un secret est toujours majeur ; aucun agent ne contourne une interdiction de lecture ou d'écriture, et le fichier concerné va en relecture humaine avant la PR ; un run interrompu ne se reprend pas, on en relance un nouveau, et les tâches déjà fusionnées sont sautées.
 
@@ -171,13 +174,14 @@ plugins/orchestre/
 ├── skills/pret/                     /orchestre:pret
 ├── skills/lancer/                   /orchestre:lancer
 ├── skills/etat/                     /orchestre:etat
-├── agents/                          les 8 agents du workflow
+├── agents/                          les 9 agents du workflow
 ├── workflows/executer-phase.js      le workflow, un run par phase
-└── scripts/                         plan-lint.mjs (validation et compilation d'un plan), etat.mjs (/orchestre:etat)
+└── scripts/                         plan-lint.mjs (validation et compilation d'un plan), etat.mjs (/orchestre:etat), suivi.mjs (suivi.json et SUIVI.md)
 tests/
 ├── scenarios.mjs                    scénarios simulés du workflow
 ├── plan-lint.test.mjs               plan-lint sur des plans jouets
 ├── etat.test.mjs                    /orchestre:etat sur un dépôt jouet
+├── suivi.test.mjs                   suivi.mjs dans des dépôts temporaires
 ├── modele.test.mjs                  modèle de réglages de l'installer
 └── depot-jouet.sh                   dépôt jouet pour un essai réel
 ```
@@ -185,7 +189,7 @@ tests/
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 67 scénarios du workflow, avec des agents simulés, rien n'est lancé pour de vrai ; 13 cas de plan-lint et 7 cas de `/orchestre:etat` dans des dépôts git temporaires ; le modèle de réglages de l'installer.
+- Tests : `npm test` : 82 scénarios du workflow, avec des agents simulés, dont 4 qui lancent le vrai `suivi.mjs` dans un dépôt temporaire ; 13 cas de plan-lint, 7 cas de `/orchestre:etat` et 17 cas de `suivi.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer.
 - Validation : `npm run validate` (`claude plugin validate` sur le plugin et sur la marketplace).
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
 - Publier une version :

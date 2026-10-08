@@ -2,6 +2,27 @@
 
 Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
 
+## 0.8.0 — en cours, non publiée : suivi dynamique
+
+Le numéro de version du plugin reste 0.6.3 tant que la 0.8.0 n'est pas finie. Contrat `orchestre-suivi/1` et choix tranchés le 05/10 : dossier `0.8.0/` du dossier de travail (CONTRAT.md, ECARTS.md).
+
+- `scripts/suivi.mjs` : seul écrivain de `plans/<nom>/suivi.json` (hors git, par `.git/info/exclude`) et de la vue SUIVI.md, dont il ne régénère que le tableau. Node 18, aucune dépendance. Commandes `debut-run`, `etape`, `cloture`, `arbitrage`, `fin-run`, `pilote`, `vue`, `etat`, `valider` ; l'objet JSON sur l'entrée standard ou dans `--json '<objet>'`. Verrou, fichier temporaire renommé, validation de chaque écriture (refus : code 1, fichiers intacts). Un `suivi.json` perdu se reconstruit depuis SUIVI.md, HANDOFF.md et plan-lint.
+- Branché dans le workflow, par `args.suivi` (le chemin du script, passé par `/orchestre:lancer`). Le workflow ne lance rien : il écrit dans la consigne de chaque agent la commande à lancer, en une ligne (objet JSON entre guillemets simples, apostrophe, accent grave et dollar en échappements `\u`), et lit son résultat dans `suivi_ok`. Les textes passés au suivi tiennent sur une ligne et sont coupés à 240 caractères (extraits de commande) ; HANDOFF.md garde le texte entier.
+  - Ouverture du run (`debut-run`) : le premier agent du run, soit le premier scribe d'arbitrage, soit le lecteur-plan. Un arbitrage est ainsi noté dans le run qui l'applique. Ouverture refusée : le run rend `erreur` avant toute tâche.
+  - Étapes : première commande du worker (avec `isole`), du vérificateur, de l'évaluateur, de la correction (avec son refus), de l'intégrateur et du scribe. Une étape ratée ne fausse que l'affichage : le run continue, et elle va dans `suivi_echecs`.
+  - Clôture et arbitrage : le scribe lance `cloture` ou `arbitrage` juste avant son commit ; le script régénère SUIVI.md, que le scribe n'édite plus. La clôture porte statut, essais, branche, refus, tests instables, critères non vérifiables, blocage, relectures, points (sans leurs actions), décisions d'office, tâches ajoutées, amendements, et la fin de la replanification. Une clôture ou un arbitrage non écrit arrête le run pour un humain, comme un scribe en échec ; leur `suivi_ok` est requis dans le schéma, comme `ouverture_ok` pour l'agent qui ouvre le run.
+  - Fin de run : nouvel agent `orchestre:greffier` (haiku), une fois par run, à toute sortie qui suit l'ouverture : `fin-run` avec le bilan (sans les actions ni les résumés), puis commit de SUIVI.md seul (`git commit … -- <plan>/SUIVI.md`) s'il a changé. C'est le cas d'une tâche close par une exception du workflow, que `fin-run` clôt d'après le bilan, en gardant les essais et la branche du suivi. Un greffier qui lève ou ne répond pas ne fait pas perdre le bilan.
+  - Sans `args.suivi`, consignes et suivi de la 0.6.3 à l'identique.
+- `suivi.mjs` :
+  - une tâche ajoutée dont le fichier n'existe pas (retirée par le scribe sur un refus de plan-lint, qu'il signale de son côté) est sautée et notée au journal, au lieu de faire refuser toute la clôture ;
+  - `fin-run` complète les tâches ajoutées du run au lieu de les remplacer (le bilan ne connaît pas celles des arbitrages), et fait entrer dans le suivi une tâche ajoutée par une clôture non écrite ;
+  - `vue` relit les statuts dans SUIVI.md et git, comme `debut-run` : une tâche fusionnée à la main sans `pilote` passe à « fusionnée ».
+- `/orchestre:lancer` : passe `suivi` ; au pré-vol, contrôle la règle `Bash(node …/suivi.mjs *)` et l'agent `orchestre:greffier`, et régénère SUIVI.md par `suivi.mjs vue`, commité seul après accord ; lit `suivi_echecs` ; les gestes du pilote (tâche fusionnée à la main, annulée) passent par `suivi.mjs pilote` ; `--reprendre` affiche `suivi.mjs etat`.
+- `/orchestre:installer` : ajoute la règle du suivi avec celle de plan-lint ; `/orchestre:pret` la contrôle.
+- Agents : une règle commune pour la commande de suivi (la lancer telle quelle, une seule fois, et rendre son résultat ; elle n'écrit que le suivi, hors git ; refusée ou en échec, elle ne compte nulle part ailleurs). Le workflow écarte aussi une commande de suivi citée parmi les commandes refusées au vérificateur.
+- Tests : 15 scénarios du workflow avec le suivi, dont 4 qui lancent le vrai `suivi.mjs` dans un dépôt temporaire (refus et blocage, exception, clôture complète puis arbitrage, tâche ajoutée par un arbitrage) ; 17 cas pour `suivi.mjs`.
+- Pas encore vérifié sur le Mac : la règle d'autorisation avec une commande qui porte un long JSON, l'écriture dans le checkout principal depuis un worktree isolé, le coût des appels de suivi par tâche (donnée à collecter). `/orchestre:etat` reste en place.
+
 ## 0.6.3 — 29/09/2026 : état du plan
 
 - Nouvelle commande `/orchestre:etat [plans/<nom>]` : l'avancement du plan en un tableau compact.

@@ -3,7 +3,8 @@
 // Node 18 ou plus, aucune dépendance. Contrat : 0.8.0/CONTRAT.md ; schéma : SCHEMA ci-dessous, copie de suivi.v1.schema.json.
 //
 // Usage : node <racine du plugin>/scripts/suivi.mjs <commande> [<dossier-plan>] [options]
-// Les écritures lisent un objet JSON sur l'entrée standard. Sans dossier, le seul plan de plans/.
+// Les écritures lisent un objet JSON sur l'entrée standard, ou dans l'option --json '<objet>' (une seule commande à autoriser,
+// sans heredoc ni pipe : c'est la forme que le workflow donne à ses agents). Sans dossier, le seul plan de plans/.
 //   debut-run  { phase, mode, parallelisme, corrections_max, decisions_office_max, run_id? }
 //              une fois par run, par son premier agent : relit le plan (plan-lint), passe un run resté en cours à « interrompu »
 //   etape      { tache, etape, isole?, refus? }      étape : worker, vérification, évaluation, correction, fusion, replanification, suivi
@@ -14,7 +15,7 @@
 //   fin-run    la valeur de retour du workflow (statut, detail, arbitrage, points_a_trancher, taches…) ;
 //              clôt, d'après le bilan, les tâches restées sans clôture (exception du workflow, E:316) et régénère alors SUIVI.md
 //   pilote     { tache, statut: "fusionnée" | "annulée", raison? }      geste du pilote ; régénère SUIVI.md
-//   vue [--stdout]          régénère SUIVI.md (ou l'affiche sans rien écrire)
+//   vue [--stdout]          régénère SUIVI.md (ou l'affiche sans rien écrire) ; statuts relus dans SUIVI.md et git, comme debut-run
 //   etat                    l'avancement en Markdown compact, comme /orchestre:etat ; lecture seule, toujours code 0
 //   valider [--fichier <f>] valide suivi.json contre le schéma
 // Codes de sortie : 0 fait ; 1 écriture refusée, suivi.json et SUIVI.md inchangés ; 2 appel invalide.
@@ -567,11 +568,13 @@ const numeroRun = doc => runEnCours(doc)?.numero ?? refuser('aucun run en cours 
 // Tâches créées par une clôture ou un arbitrage : le fichier de tâche existe déjà (le scribe l'a écrit), plan-lint le lit.
 // Rappelée pour une tâche déjà là (scribe relancé, suivi reconstruit), elle n'est pas dupliquée.
 function ajouter(doc, items, parent, { L, J, ctx }) {
-  const run = runEnCours(doc)
+  const run = runEnCours(doc), sautees = []
   for (const x of items) {
     if (!x || !RE_ID.test(x.id || '')) refuser(`tâche ajoutée sans identifiant valide : ${JSON.stringify(x)}`)
     const lt = (L.taches || []).find(t => t.id === x.id)
-    if (!lt && !(x.phase && x.modele)) refuser(`${x.id} : aucun fichier de tâche lu par plan-lint ; crée-le avant d'appeler le script, ou donne phase et modele`)
+    // Sans fichier de tâche (le scribe l'a retiré sur un refus de plan-lint, et le signale de son côté) : sautée, notée au journal.
+    // Refuser toute l'écriture ferait perdre la clôture de la tâche qui l'a proposée.
+    if (!lt && !(x.phase && x.modele)) { J('erreur', x.id, `${x.id} non ajoutée au suivi : aucun fichier de tâche lu par plan-lint (ajout proposé par ${parent ?? 'le bilan du run'})`); sautees.push(x.id); continue }
     const plan = lt ? champsPlan(ctx, lt) : { phase: x.phase, modele: x.modele, depend_de: x.depend_de ?? [], lot: x.lot ?? null, estimation_tokens: x.estimation_tokens ?? null }
     let t = doc.taches.find(y => y.id === x.id)
     if (!t) t = nouvelleTache({ id: x.id, titre: x.titre, statut: 'ajoutée', ...plan })
@@ -580,9 +583,11 @@ function ajouter(doc, items, parent, { L, J, ctx }) {
     Object.assign(t, plan, { titre: x.titre || t.titre })
     if (t.statut === 'à-faire') t.statut = 'ajoutée'
     if (run && !run.taches_ajoutees.some(y => y.id === t.id)) run.taches_ajoutees.push({ id: t.id, phase: t.phase, titre: t.titre })
-    J('ajout', t.id, `${t.id} ajoutée par ${parent} (phase ${t.phase}) : ${t.titre}`)
+    J('ajout', t.id, `${t.id} ajoutée par ${parent ?? 'le bilan du run'} (phase ${t.phase}) : ${t.titre}`)
   }
+  return sautees
 }
+const sans = ids => (ids.length ? ` ; non ajoutée${ids.length > 1 ? 's' : ''}, sans fichier de tâche : ${ids.join(', ')}` : '')
 const noterAmendements = (E, J, tache) => {
   for (const a of liste(E, 'amendements')) J('amendement', a.id ?? null, `${a.id} amendée après ${tache} : ${a.raison ?? 'sans raison'}`)
 }
@@ -614,9 +619,9 @@ function cloture(doc, E, outils) {
     doc.points.push(pointDe(p, nrun(), t.id, 'a-trancher'))
     J('point', t.id, `${t.id} : point « ${p.titre} »${p.humain ? ' (humain)' : ''}`)
   }
-  ajouter(doc, liste(E, 'taches_ajoutees'), t.id, outils)
+  const sautees = ajouter(doc, liste(E, 'taches_ajoutees'), t.id, outils)
   noterAmendements(E, J, t.id)
-  return { vue: true, message: `${t.id} ${E.statut} ; SUIVI.md régénéré` }
+  return { vue: true, message: `${t.id} ${E.statut} ; SUIVI.md régénéré${sans(sautees)}` }
 }
 
 function arbitrage(doc, E, outils) {
@@ -633,12 +638,13 @@ function arbitrage(doc, E, outils) {
     if (run) run.amendements_ecartes.push({ tache: t.id, id: a.id, raison: a.raison ?? '' })
     J('amendement', a.id ?? null, `amendement de ${a.id} écarté (${t.id}) : ${a.raison ?? 'sans raison'}`)
   }
-  ajouter(doc, liste(E, 'taches_ajoutees'), t.id, outils)
+  const sautees = ajouter(doc, liste(E, 'taches_ajoutees'), t.id, outils)
   noterAmendements(E, J, t.id)
-  return { vue: true, message: `arbitrage ${t.id} option ${option} ; SUIVI.md régénéré` }
+  return { vue: true, message: `arbitrage ${t.id} option ${option} ; SUIVI.md régénéré${sans(sautees)}` }
 }
 
-function finRun(doc, E, { J, quand }) {
+function finRun(doc, E, outils) {
+  const { J, quand } = outils
   const run = runEnCours(doc) || refuser('aucun run en cours : lance d\'abord debut-run')
   if (!FINS_DE_RUN.includes(E.statut)) refuser(`fin-run : statut « ${E.statut} » inconnu (${FINS_DE_RUN.join(', ')})`)
   run.statut = E.statut
@@ -648,7 +654,14 @@ function finRun(doc, E, { J, quand }) {
   const ids = k => liste(E, k).map(x => (typeof x === 'string' ? x : x && x.id))
   if (E.arbitrages_appliques) run.arbitrages_appliques = liste(E, 'arbitrages_appliques').map(a => ({ tache: a.tache, titre: a.titre, option: String(a.option && typeof a.option === 'object' ? a.option.id : a.option) }))
   if (E.amendements_ecartes) run.amendements_ecartes = liste(E, 'amendements_ecartes').map(a => ({ tache: a.tache, id: a.id, raison: a.raison ?? '' }))
-  if (E.taches_ajoutees) run.taches_ajoutees = liste(E, 'taches_ajoutees').map(x => ({ id: x.id, phase: x.phase, titre: x.titre }))
+  // Tâches ajoutées : le bilan ne connaît pas celles des arbitrages, déjà notées par la commande arbitrage ; on complète sans retirer.
+  // Une tâche du bilan absente du suivi (clôture non écrite) y entre, avec la tâche qui l'a créée si le bilan la donne.
+  let vueAFaire = false
+  for (const x of liste(E, 'taches_ajoutees')) {
+    if (!x || !RE_ID.test(x.id || '')) continue
+    if (!doc.taches.some(t => t.id === x.id)) { const avant = doc.taches.length; ajouter(doc, [x], RE_ID.test(x.ajoutee_par || '') ? x.ajoutee_par : null, outils); vueAFaire ||= doc.taches.length > avant }
+    if (!run.taches_ajoutees.some(y => y.id === x.id)) run.taches_ajoutees.push({ id: x.id, phase: x.phase, titre: x.titre })
+  }
   for (const k of ['reportees', 'non_lancees', 'en_attente']) if (E[k]) run[k] = ids(k)
   if (E.en_attente_prerequis) run.en_attente_prerequis = liste(E, 'en_attente_prerequis').map(x => ({ id: x.id, prerequis: x.prerequis || [] }))
   for (const d of liste(E, 'decisions_office')) {
@@ -665,7 +678,6 @@ function finRun(doc, E, { J, quand }) {
   }
   // Exception du workflow (E:316) : une tâche du bilan sans clôture dans ce run est close ici, d'après le bilan
   const debut = Date.parse(run.debut)
-  let vueAFaire = false
   for (const r of liste(E, 'taches')) {
     const t = doc.taches.find(x => x.id === r.id)
     if (!t || !r.statut || !(t.etape || !t.fin || Date.parse(t.fin) < debut)) continue
@@ -774,23 +786,28 @@ function etat(arg) {
 }
 
 // ─── Entrée ──────────────────────────────────────────────────────────────────────────────────────────────────────
-function entree() {
-  if (process.stdin.isTTY) throw new Usage('objet JSON attendu sur l\'entrée standard')
-  const brut = essai(() => readFileSync(0, 'utf8')) || ''
-  if (!brut.trim()) throw new Usage('objet JSON attendu sur l\'entrée standard')
+// L'objet de --json s'il est donné, sinon l'entrée standard
+function entree(json) {
+  const source = json != null ? '--json' : 'entrée standard'
+  if (json == null && process.stdin.isTTY) throw new Usage('objet JSON attendu sur l\'entrée standard ou dans --json')
+  const brut = json != null ? json : essai(() => readFileSync(0, 'utf8')) || ''
+  if (!brut.trim()) throw new Usage(`objet JSON attendu sur l'entrée standard ou dans --json`)
   let E
-  try { E = JSON.parse(brut) } catch (e) { throw new Usage(`entrée standard : JSON invalide (${e.message})`) }
-  if (!E || typeof E !== 'object' || Array.isArray(E)) throw new Usage('entrée standard : un objet JSON est attendu')
+  try { E = JSON.parse(brut) } catch (e) { throw new Usage(`${source} : JSON invalide (${e.message})`) }
+  if (!E || typeof E !== 'object' || Array.isArray(E)) throw new Usage(`${source} : un objet JSON est attendu`)
   return E
 }
 
 const ECRITURES = { 'debut-run': debutRun, etape, cloture, arbitrage, 'fin-run': finRun, pilote }
-const USAGE = 'usage : suivi.mjs <debut-run|etape|cloture|arbitrage|fin-run|pilote|vue|etat|valider> [<dossier-plan>] [--stdout] [--fichier <suivi.json>] ; JSON sur l\'entrée standard pour les écritures'
+const USAGE = 'usage : suivi.mjs <debut-run|etape|cloture|arbitrage|fin-run|pilote|vue|etat|valider> [<dossier-plan>] [--stdout] [--fichier <suivi.json>] [--json <objet>] ; pour les écritures, JSON dans --json ou sur l\'entrée standard'
 
 function principal() {
   const argv = process.argv.slice(2), cmd = argv[0]
   const fi = argv.indexOf('--fichier'), fichier = fi >= 0 ? argv[fi + 1] : null
-  const arg = argv.slice(1).find((a, i, xs) => !a.startsWith('--') && xs[i - 1] !== '--fichier')
+  const ji = argv.indexOf('--json')
+  if (ji >= 0 && ji + 1 >= argv.length) throw new Usage('--json : objet JSON attendu après l\'option')
+  const json = ji >= 0 ? argv[ji + 1] : null
+  const arg = argv.slice(1).find((a, i, xs) => !a.startsWith('--') && xs[i - 1] !== '--fichier' && xs[i - 1] !== '--json')
   if (cmd === 'etat') {
     let texte
     try { texte = etat(arg) } catch (e) { texte = `orchestre:etat : ${String((e && e.message) || e).split('\n')[0]}` }
@@ -813,18 +830,20 @@ function principal() {
     if (argv.includes('--stdout')) {
       const L = planLint(ctx), handoff = lireOu(join(ctx.dir, 'HANDOFF.md')) || '', quand = maintenant()
       const existant = charger(ctx), doc = existant || reconstruire(ctx, L, handoff, quand)
-      if (existant) synchroniser(doc, L, ctx, noter(doc, quand), { statuts: false })
+      if (existant) synchroniser(doc, L, ctx, noter(doc, quand), { statuts: true })
       deriver(doc, L, handoff)
       process.stdout.write(vue(doc, lireOu(join(ctx.dir, 'SUIVI.md'))))
       return 0
     }
-    const r = ecrire(ctx, () => ({ vue: true }))
+    // Entre deux runs (pré-vol de /orchestre:lancer) : SUIVI.md et git font foi pour les statuts, comme au début d'un run
+    // (une tâche fusionnée à la main sans « suivi.mjs pilote » passe à « fusionnée »)
+    const r = ecrire(ctx, (doc, { L, ctx: c, J }) => { synchroniser(doc, L, c, J, { statuts: true }); return { vue: true } })
     console.log(`suivi : SUIVI.md régénéré (${pluriel(r.doc.taches.length, 'tâche')})`)
     return 0
   }
   const changer = ECRITURES[cmd]
   if (!changer) throw new Usage(USAGE)
-  const ctx = localiser(arg), E = entree()
+  const ctx = localiser(arg), E = entree(json)
   const r = ecrire(ctx, (doc, outils) => changer(doc, E, outils), { debutRun: cmd === 'debut-run' })
   console.log(`suivi : ${r.message}`)
   return 0

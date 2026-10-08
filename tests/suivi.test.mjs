@@ -392,7 +392,8 @@ async function main() {
     })
     assert.equal(r.out, 'suivi : run 2 arbitrage ; SUIVI.md régénéré, à commiter')
     const doc = C.doc(), run = doc.runs[1]
-    assert.deepEqual([run.statut, run.non_lancees, run.amendements_ecartes, run.taches_ajoutees.length], ['arbitrage', ['T06', 'T07', 'T08'], [{ tache: 'T03', id: 'T01', raison: 'déjà fusionnée' }], 1])
+    // Tâches ajoutées : le bilan (une seule) complète celles du run (trois, dont une d'arbitrage que le bilan ne connaît pas), sans les remplacer
+    assert.deepEqual([run.statut, run.non_lancees, run.amendements_ecartes, run.taches_ajoutees.map(x => x.id)], ['arbitrage', ['T06', 'T07', 'T08'], [{ tache: 'T03', id: 'T01', raison: 'déjà fusionnée' }], ['T03B', 'T03C', 'T03D']])
     assert.ok(run.fin >= run.debut)
     const t4 = doc.taches.find(t => t.id === 'T04'), t5 = doc.taches.find(t => t.id === 'T05')
     assert.deepEqual([t4.statut, t4.etape, t4.blocage], ['échec', null, ['erreur du workflow : Error: boom']])
@@ -412,6 +413,33 @@ async function main() {
     const L = C.lint()
     assert.deepEqual(['T04', 'T08'].map(id => L.taches.find(t => t.id === id).statut), ['fusionnée', 'annulée'])
     assert.ok(C.doc().journal.some(e => e.genre === 'pilote' && e.texte === 'T08 : annulée par le pilote — hors périmètre'))
+  })
+
+  await cas('--json : même effet que l\'entrée standard, texte échappé comme le workflow l\'écrit ; tâche ajoutée sans fichier sautée', () => {
+    const manques = ["l'option `--force` coûte $5", 'guillemets "doubles", barre \\ et accents éèà']
+    const brut = JSON.stringify({ tache: 'T07', etape: 'correction', refus: { essai: 1, par: 'évaluation', manques } })
+    // Échappement du workflow : rien qui ferme ou interprète des guillemets simples
+    const echappe = brut.replace(/'/g, '\\u0027').replace(/`/g, '\\u0060').replace(/\$/g, '\\u0024')
+    assert.ok(!/['`$]/.test(echappe))
+    const r = C.suivi('etape', undefined, { args: ['--json', echappe] })
+    assert.equal(r.code, 0, r.err)
+    assert.deepEqual(tC('T07').refus, [{ essai: 1, par: 'évaluation', manques }])
+    // Par le shell, entre guillemets simples, comme la commande d'un agent
+    const sh = spawnSync('sh', ['-c', `"${process.execPath}" "${SUIVI}" etape ${C.plan} --json '${echappe}'`], { cwd: C.racine, encoding: 'utf8' })
+    assert.equal(sh.status, 0, sh.stderr)
+    assert.deepEqual(tC('T07').refus.map(x => x.manques), [manques, manques])
+    assert.equal(C.suivi('etape', undefined, { args: ['--json'] }).code, 2)
+    const inv = C.suivi('etape', undefined, { args: ['--json', '{x'] })
+    assert.deepEqual([inv.code, /--json : JSON invalide/.test(inv.err)], [2, true])
+    // Tâche ajoutée dont le scribe a retiré le fichier (refus de plan-lint, qu'il signale de son côté) : sautée et notée, le reste écrit
+    const a = C.suivi('arbitrage', { tache: 'T03', titre: 'Seuil', option: 'B', taches_ajoutees: [{ id: 'T03Z', titre: 'Refusée par plan-lint', phase: 1 }] })
+    assert.equal(a.code, 0, a.err)
+    assert.equal(a.out, 'suivi : arbitrage T03 option B ; SUIVI.md régénéré ; non ajoutée, sans fichier de tâche : T03Z')
+    const doc = C.doc()
+    assert.ok(!doc.taches.some(t => t.id === 'T03Z') && !C.lire('SUIVI.md').includes('T03Z'))
+    assert.ok(doc.journal.some(e => e.genre === 'erreur' && e.tache === 'T03Z'))
+    assert.ok(doc.journal.some(e => e.genre === 'arbitrage' && e.tache === 'T03'))
+    assert.equal(C.suivi('valider').code, 0)
   })
 
   await cas('journal : 200 événements au plus, journal_omis compte ceux qui sortent', () => {
@@ -452,6 +480,35 @@ async function main() {
     assert.match(e.err, /SUIVI\.md, ligne \d+ : statut inconnu « en-cours » pour T07/)
     assert.ok(!existsSync(join(C.d, 'suivi.json')))
     doc = null
+  })
+
+  await cas('fin de run : une tâche ajoutée du bilan absente du suivi (clôture non écrite) y entre, avec la tâche qui l\'a créée', () => {
+    const F = depot('fin', { taches: [{ id: 'T01' }, { id: 'T02' }], suivi: SUIVI_GABARIT(['T01', 'T02']) })
+    assert.equal(F.suivi('debut-run', RUN).code, 0)
+    F.ecrireTache({ id: 'T02B', phase: 1, depend_de: ['T02'] })
+    assert.equal(F.suivi('arbitrage', { tache: 'T02', titre: 'Garde', option: 'A', taches_ajoutees: [{ id: 'T02B', titre: 'Garde du flag', phase: 1 }] }).code, 0)
+    // Créée par le scribe de T01, dont la clôture n'a pas été écrite
+    F.ecrireTache({ id: 'T01B', phase: 1, depend_de: ['T01'] })
+    const r = F.suivi('fin-run', { statut: 'arbitrage', taches: [{ id: 'T01', statut: 'fusionnée', essais: 1, branche: 'tache/T01' }], taches_ajoutees: [{ id: 'T01B', phase: 1, titre: 'Suite de T01', ajoutee_par: 'T01' }, { id: 'pas un id', phase: 1, titre: 'x' }] })
+    assert.equal(r.code, 0, r.err)
+    assert.equal(r.out, 'suivi : run 1 arbitrage ; SUIVI.md régénéré, à commiter')
+    const doc = F.doc()
+    assert.deepEqual(doc.runs[0].taches_ajoutees.map(x => x.id), ['T02B', 'T01B'])
+    assert.deepEqual(doc.taches.map(t => [t.id, t.statut, t.ajoutee_par]), [['T01', 'fusionnée', null], ['T01B', 'ajoutée', 'T01'], ['T02', 'à-faire', null], ['T02B', 'ajoutée', 'T02']])
+    assert.ok(/\| T01B \| Suite de T01 /.test(F.lire('SUIVI.md')))
+    assert.equal(F.suivi('valider').code, 0)
+  })
+
+  await cas('vue entre deux runs : une tâche fusionnée à la main (commit « tâche <id> : » sans suivi.mjs pilote) passe à « fusionnée »', () => {
+    const V = depot('vue', { taches: [{ id: 'T01' }, { id: 'T02' }], suivi: SUIVI_GABARIT(['T01', 'T02']) })
+    assert.equal(V.suivi('debut-run', RUN).code, 0)
+    V.git('commit', '-q', '--allow-empty', '-m', 'tâche T01 : Tâche T01')
+    assert.equal(V.lint().taches.find(t => t.id === 'T01').statut, 'fusionnée', 'plan-lint lit git')
+    assert.match(V.suivi('vue', undefined, { args: ['--stdout'] }).out, /\| T01 .*\| fusionnée \|/)
+    assert.equal(V.suivi('vue').code, 0)
+    assert.match(V.lire('SUIVI.md').split('\n').find(l => l.startsWith('| T01 ')), /\| fusionnée \|/)
+    assert.equal(V.doc().taches.find(t => t.id === 'T01').statut, 'fusionnée')
+    assert.ok(V.doc().journal.some(e => e.texte === 'T01 : à-faire → fusionnée (SUIVI.md et git)'))
   })
 
   console.log(`suivi : TOUT EST VERT (${n} cas)`)
