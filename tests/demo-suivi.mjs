@@ -119,21 +119,32 @@ async function jouer(pas, n0) {
 creerDepot()
 console.log(`Dépôt de démo créé : ${D}
 
+Avant d'ouvrir la session :
+  claude --version              2.1.287 ou plus : les mods sont actifs par défaut à partir de cette version
+  claude plugin test            lancé dans un dossier sans mod, doit dire « no hooks module to load » (mods permis)
+
 Ouvre une session Claude Code dans ce dossier, avec le mod :
   cd "${D}" && claude --plugin-dir "${MOD}"
 (ou, s'il est déjà installé depuis la marketplace : cd "${D}" && claude)
+Accepte l'invite de confiance du dossier : sans elle, aucun mod ne se charge.
 Vérifie avec /plugin qu'il est chargé : la ligne sous les onglets doit nommer orchestre-suivi.
 Le mod relit suivi.json toutes les 2 s : chaque pas ci-dessous doit apparaître dans la session en 2 s au plus.
 Le suffixe du spinner ne se voit que pendant que Claude travaille : pendant un run, demande-lui par exemple
-« lance sleep 60 dans Bash ».`)
+« lance sleep 60 dans Bash ».
+
+Si rien n'apparaît : avec --plugin-dir, la transcription porte une ligne « orchestre-suivi: … refused: » ou
+« … hook skipped: » qui dit pourquoi. Sinon, relance la session avec --debug-file mod.log et cherche
+orchestre-suivi dans ce fichier (grep orchestre-suivi mod.log).`)
 await entree('\nEntrée pour lancer le run 1… ')
 await jouer(RUN1, 1)
 bilan()
 console.log(`
 Le run 1 s'est arrêté sur un arbitrage. Dans la session, essaie :
-  /suivi            le panneau : onglets t (Tâches), r (À relire), j (Journal), b (Bilan) ; p dans le Bilan prépare la PR
+  /suivi            le panneau : onglets t (Tâches), r (À relire), j (Journal), b (Bilan) ; p dans le Bilan prépare la PR ;
+                    Échap le ferme
   /suivi texte      le même état en texte
-  « Masquer »       au bout du bandeau : il disparaît jusqu'au run suivant`)
+  0                 tapé seul dans le prompt vide, puis une pause : « Masquer », au bout du bandeau, le fait disparaître
+                    jusqu'au run suivant`)
 await entree('\nEntrée pour lancer le run 2… ')
 await jouer(RUN2, RUN1.length + 1)
 bilan()

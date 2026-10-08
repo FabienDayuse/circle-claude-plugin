@@ -17,6 +17,8 @@ const JOURNAL_VU = 40
 // Un run noté « en-cours » sans écriture depuis 45 min est montré « sans nouvelles » : interrompu (Échap, session tuée),
 // il reste « en-cours » jusqu'au debut-run suivant. Une étape seule (un worker) peut durer ; au-delà, mieux vaut le dire.
 export const SILENCE_MS = 45 * 60000
+// Durée d'une notification qui demande quelqu'un (4 s par défaut pour les autres)
+export const DUREE_IMPORTANTE_MS = 15000
 
 /** @param {unknown} x @returns {x is Record<string, any>} */
 const estObjet = x => typeof x === 'object' && x !== null && !Array.isArray(x)
@@ -216,28 +218,57 @@ export function quoi(t, active, tranchee = false) {
   return t.attend.length ? `attend ${t.attend.slice(0, 4).join(', ')}${t.attend.length > 4 ? '…' : ''}` : ''
 }
 
+/** Largeur affichée d'une ligne, en cellules (tous ses glyphes en occupent une). @param {Ligne} l */
+export const largeur = l => l.reduce((n, m) => n + [...m.t].length, 0)
+
 /**
- * Le bandeau au-dessus du prompt : une ligne, ou rien (null) quand aucun run n'est à montrer.
- * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @returns {Ligne | null}
+ * Le bandeau au-dessus du prompt : une ligne, ou rien (null) quand aucun run n'est à montrer. Il tient dans `colonnes`
+ * moins `reserve` (la place d'un bouton à sa suite) : on retire l'aide, puis on raccourcit les libellés et la barre, puis
+ * la durée et le numéro du run, jusqu'à ce qu'il tienne. La forme la plus courte fait une quarantaine de cellules sur
+ * un petit plan, une soixantaine au plus sur un gros ; en deçà, l'affichage coupe la fin de la ligne.
+ * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @param {number} [reserve] @returns {Ligne | null}
  */
-export function bandeau(inst, maintenant, colonnes) {
-  const s = resumer(inst, maintenant)
+export function bandeau(inst, maintenant, colonnes, reserve = 0) {
   if (!inst.run) return null
+  const s = resumer(inst, maintenant)
+  const place = Math.max(0, colonnes - reserve)
+  /** @type {Ligne | null} */
+  let l = null
+  for (const forme of FORMES_BANDEAU) {
+    l = ligneBandeau(inst, s, maintenant, forme)
+    if (largeur(l) <= place) return l
+  }
+  return l
+}
+// Du plus complet au plus court
+const FORMES_BANDEAU = [
+  { aide: true, libelles: true, barre: 14, nom: 28, duree: true, run: true },
+  { aide: false, libelles: true, barre: 14, nom: 28, duree: true, run: true },
+  { aide: false, libelles: false, barre: 8, nom: 16, duree: true, run: true },
+  { aide: false, libelles: false, barre: 4, nom: 12, duree: false, run: true },
+  { aide: false, libelles: false, barre: 0, nom: 8, duree: false, run: true },
+  { aide: false, libelles: false, barre: 0, nom: 8, duree: false, run: false },
+]
+/**
+ * @param {Instantane} inst @param {ReturnType<typeof resumer>} s @param {number} maintenant
+ * @param {typeof FORMES_BANDEAU[number]} f @returns {Ligne}
+ */
+function ligneBandeau(inst, s, maintenant, f) {
+  const run = /** @type {NonNullable<Instantane['run']>} */ (inst.run)
   const enCoursRun = !!s.run
-  const etroit = colonnes < 100
-  const tete = s.silence ? { t: '◌ ', c: 'warning' } : enCoursRun ? { t: '▶ ', c: 'claude' } : inst.run.statut === 'terminé' ? { t: '✓ ', c: 'success' } : { t: '■ ', c: 'warning' }
+  const tete = s.silence ? { t: '◌ ', c: 'warning' } : enCoursRun ? { t: '▶ ', c: 'claude' } : run.statut === 'terminé' ? { t: '✓ ', c: 'success' } : { t: '■ ', c: 'warning' }
   /** @type {Ligne} */
-  const l = [{ ...tete, b: true }, { t: court(inst.plan, etroit ? 16 : 28), b: true }]
-  const phase = phaseDuRun(inst)
-  l.push({ t: `  phase ${phase}/${s.phaseMax}`, d: true })
-  l.push({ t: '  ▕', d: true }, { t: barre(s.faites, s.total, etroit ? 8 : 14), c: 'success' }, { t: '▏', d: true }, { t: ` ${s.faites}/${s.total}` })
-  if (s.enCours.length) l.push({ t: `  ◐ ${s.enCours.length}${etroit ? '' : ' en cours'}`, c: 'suggestion' })
-  if (s.relectures) l.push({ t: `  ⚑ ${s.relectures}${etroit ? '' : ' à relire'}`, c: 'warning' })
-  if (s.attention.length) l.push({ t: `  ⚠ ${s.attention.length}${etroit ? '' : ' à toi'}`, c: 'warning' })
-  if (s.silence) l.push({ t: `  sans nouvelles depuis ${duree(maintenant - /** @type {number} */ (inst.maj))}`, c: 'warning' })
-  else if (!enCoursRun) l.push({ t: `  run ${inst.run.numero} ${inst.run.statut}`, c: inst.run.statut === 'terminé' ? 'success' : 'warning' })
-  l.push({ t: `  ⏱ ${duree(s.duree)}`, d: true })
-  if (!etroit) l.push({ t: '   /suivi pour le détail', d: true })
+  const l = [{ ...tete, b: true }, { t: court(inst.plan, f.nom), b: true }]
+  l.push({ t: `  phase ${phaseDuRun(inst)}/${s.phaseMax}`, d: true })
+  if (f.barre) l.push({ t: '  ▕', d: true }, { t: barre(s.faites, s.total, f.barre), c: 'success' }, { t: '▏', d: true }, { t: ` ${s.faites}/${s.total}` })
+  else l.push({ t: `  ${s.faites}/${s.total}` })
+  if (s.enCours.length) l.push({ t: `  ◐ ${s.enCours.length}${f.libelles ? ' en cours' : ''}`, c: 'suggestion' })
+  if (s.relectures) l.push({ t: `  ⚑ ${s.relectures}${f.libelles ? ' à relire' : ''}`, c: 'warning' })
+  if (s.attention.length) l.push({ t: `  ⚠ ${s.attention.length}${f.libelles ? ' à toi' : ''}`, c: 'warning' })
+  if (s.silence) l.push({ t: f.libelles ? `  sans nouvelles depuis ${duree(maintenant - /** @type {number} */ (inst.maj))}` : `  ◌ ${duree(maintenant - /** @type {number} */ (inst.maj))}`, c: 'warning' })
+  else if (!enCoursRun) l.push({ t: f.run ? `  run ${run.numero} ${run.statut}` : `  ${run.statut}`, c: run.statut === 'terminé' ? 'success' : 'warning' })
+  if (f.duree) l.push({ t: `  ⏱ ${duree(s.duree)}`, d: true })
+  if (f.aide) l.push({ t: '   /suivi pour le détail', d: true })
   return l
 }
 
@@ -348,6 +379,9 @@ export function textePR(inst, maintenant) {
   if (inst.tickets) l.push(`${pluriel(inst.tickets, 'ticket')} à ouvrir après la PR (HANDOFF.md, entrées « ticket »).`)
   return l.join('\n').replace(/\n+$/, '\n')
 }
+
+/** Une notification qui demande quelqu'un : tâche qui attend un humain, bloquée ou en échec, run arrêté ou en erreur. @param {string} m */
+export const importante = m => / attend un humain$|^✗ |^Run arrêté|\) : erreur/.test(m)
 
 /**
  * Ce qui mérite une notification entre deux lectures : run lancé ou fini, phase finie, tâche qui attend un humain,

@@ -2,6 +2,7 @@
 // hooks du test sous le plugin ($.fs, $.session.cwd), et un suivi.json qui change entre deux lectures.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { bandeau, largeur, normaliser } from '../hooks/modele.mjs'
 
 const RACINE = '/depot'
 const SUIVI = `${RACINE}/plans/demo/suivi.json`
@@ -14,26 +15,28 @@ const doc = (taches: object[], extra: object = {}) => JSON.stringify({
   points: [], decisions_office: [], relectures: [], prerequis: [], handoff: {}, lint: { ok: true, erreurs: [] }, journal: [], journal_omis: 0, ...extra,
 })
 
-// Ce que le moteur fait sous tout plugin : démarrer la session, dire son dossier, enregistrer une commande, dessiner
-function bas(on: On) {
+// Ce que le moteur fait sous tout plugin : démarrer la session, dire son dossier, enregistrer une commande, dessiner.
+// Sous le bandeau, un autre mod y dessine aussi : il doit rester visible.
+function bas(on: On, commande: 'ok' | 'pris' = 'ok') {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.attach', ($, e) => ({ clientId: e.clientId }))
+  on('classic.SessionStart', () => ({}))
   on('session.cwd', () => ({ value: RACINE }))
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('ui.render', ($, e) => { const { Box } = $.ui.resolve(e); return <Box /> })
+  on('command.register', ($, e) => (commande === 'pris' ? { deny: `"/${e.name}" refused: another plugin registered it` } : { value: { command: e.name } }))
+  on('ui.render', ($, e) => { const { Box, Text } = $.ui.resolve(e); return e.component === 'AbovePrompt' ? <Text>bandeau d'un autre mod</Text> : <Box /> })
 }
 
 // Le monde sous le plugin : un fichier suivi.json qu'on remplace, les appels d'interface notés
-function monde(on: On) {
+function monde(on: On, commande: 'ok' | 'pris' = 'ok') {
   const fichier = { texte: doc([tache('T01', 1, { etape: 'worker', isole: true, debut: '2026-10-08T11:31:00+02:00' }), tache('T02', 1), tache('T03', 2)]), mtime: 1 }
   const toasts: string[] = [], ouverts: string[] = [], remplis: string[] = []
-  bas(on)
+  bas(on, commande)
   on('fs.exists', ($, e) => ({ value: e.path === `${RACINE}/plans` || e.path === SUIVI }))
   on('fs.list', () => ({ value: [{ name: 'demo', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }, { name: 'LISEZMOI.md', kind: 'file' as const, size: 3, mtimeMs: 0, isLink: false }] }))
   on('fs.stat', ($, e) => (e.path === SUIVI ? { value: { kind: 'file' as const, size: fichier.texte.length, mtimeMs: fichier.mtime, isLink: false } } : { deny: 'ENOENT' }))
   on('fs.read', ($, e) => (e.path === SUIVI ? { value: fichier.texte } : { deny: 'ENOENT' }))
-  on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } })
-  on('ui.open', ($, e) => { ouverts.push(e.id); return { value: { isPlaced: true as const } } })
+  on('ui.toast', ($, e) => { toasts.push(e.text + (e.timeoutMs ? ` (${e.timeoutMs} ms)` : '')); return { value: undefined } })
+  on('ui.open', ($, e) => { ouverts.push(e.id + (e.closeOnEscape ? ' (Échap ferme)' : '')); return { value: { isPlaced: true as const } } })
   on('prompt.fill', ($, e) => { remplis.push(`${e.mode}:${e.text}`); return { isFilled: true } })
   return { fichier, toasts, ouverts, remplis }
 }
@@ -50,6 +53,7 @@ test('bandeau, /suivi et notifications pendant un run, sur le terminal et le bur
     expect(await ui.find({ text: /0\/3/ })).toBeDefined()
     expect(await ui.find({ text: /◐ 1 en cours/ })).toBeDefined()
     expect(await ui.find({ text: /⏱ 30 min/ })).toBeDefined()
+    expect(await ui.find({ text: /bandeau d'un autre mod/ })).toBeDefined()
     await ui.unmount()
   }
   // Dix minutes sans écriture de suivi.json : le bandeau déjà affiché se redessine (toutes les 30 s), la durée avance
@@ -63,7 +67,7 @@ test('bandeau, /suivi et notifications pendant un run, sur le terminal et le bur
   w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'] }), tache('T03', 2)])
   w.fichier.mtime = 2
   await horloge.advance(2100)
-  expect(w.toasts).toEqual(['⚑ T02 attend un humain'])
+  expect(w.toasts).toEqual(['⚑ T02 attend un humain (15000 ms)'])
 })
 
 test('panneau /suivi : onglets, bilan et brouillon de PR dans le prompt', async ($, on) => {
@@ -73,7 +77,7 @@ test('panneau /suivi : onglets, bilan et brouillon de PR dans le prompt', async 
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
   const r = await $.command.run({ command: 'suivi', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
   expect(r.text ?? '').toMatch(/ouvert dans le panneau/)
-  expect(w.ouverts).toEqual(['orchestre-suivi'])
+  expect(w.ouverts).toEqual(['orchestre-suivi (Échap ferme)'])
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface, component: 'Pane', requestId: 'orchestre-suivi', props: { title: 'Orchestre', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } })
     expect(await ui.find({ text: /Phase 1/ })).toBeDefined()
@@ -102,6 +106,7 @@ test('rien à suivre : pas de bandeau, /suivi le dit ; une session hébergée at
   expect(lus.length).toBeGreaterThan(0)
   const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
   expect(await ui.find({ text: /▶/ })).toBeUndefined()
+  expect(await ui.find({ text: /bandeau d'un autre mod/ })).toBeDefined()
   await ui.unmount()
   const r = await $.command.run({ command: 'suivi', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as never)
   expect(r.text ?? '').toMatch(/aucun plans\/<nom>\/suivi\.json/)
@@ -114,4 +119,85 @@ test('une session de bureau non interactive au démarrage est suivie', async ($,
   on('fs.exists', ($, e) => { lus.push(e.path); return { value: false } })
   await $.session.start({ cwd: RACINE, surface: 'desktop', isInteractive: false })
   expect(lus.length).toBeGreaterThan(0)
+})
+
+// $.state tenu par le test, pour simuler /clear, /resume et /branch : toutes les valeurs reviennent à leur défaut
+function etat(on: On) {
+  const valeurs = new Map<string, { value: unknown; version: number }>()
+  on('state.get', ($, e) => ({ value: valeurs.get(e.key) ?? { value: undefined, version: 0 } }) as never)
+  on('state.set', ($, e) => {
+    const avant = valeurs.get(e.key)?.version ?? 0
+    if (e.ifVersion != null && e.ifVersion !== avant) return { value: { isSet: false, version: avant } } as never
+    valeurs.set(e.key, { value: e.value, version: avant + 1 })
+    return { value: { isSet: true, version: avant + 1 } } as never
+  })
+  return { effacer: () => valeurs.clear() }
+}
+
+const FINI = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'] })], {
+  runs: [{ numero: 1, run_id: null, phase: 1, mode: 'phase', parallelisme: 2, corrections_max: 2, decisions_office_max: 3, statut: 'arbitrage', debut: '2026-10-08T11:30:00+02:00', fin: '2026-10-08T11:50:00+02:00', detail: null, arbitrages_appliques: [], amendements_ecartes: [], taches_ajoutees: [], reportees: [], non_lancees: [], en_attente: ['T02'], en_attente_prerequis: [] }],
+  relectures: [{ tache: 'T01', phase: 1, texte: '.env.example : ajouter MR_MAX', run: 1, quand: '2026-10-08T11:40:00+02:00' }],
+})
+
+test('fin de run : « Masquer » sur la touche 0, place du bouton gardée, masqué encore après /clear', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const memoire = etat(on)
+  const w = monde(on)
+  w.fichier.texte = FINI
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  // La ligne complète tiendrait seule, mais pas avec le bouton : l'aide « /suivi pour le détail » part
+  const pleine = largeur(bandeau(normaliser(JSON.parse(FINI))!, T0, 1000)!)
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: pleine + 5 } })
+  expect(await ui.find({ text: /■ / })).toBeDefined()
+  expect(await ui.find({ text: /\/suivi pour le détail/ })).toBeUndefined()
+  const bouton = await ui.find({ key: 'masquer' })
+  expect(bouton?.props.hotkey).toBe('0')
+  await ui.press({ key: 'masquer' })
+  await ui.unmount()
+  const masque = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await masque.find({ text: /■ / })).toBeUndefined()
+  expect(await masque.find({ text: /bandeau d'un autre mod/ })).toBeDefined()
+  await masque.unmount()
+  // /clear remet $.state à zéro sans relancer session.start : le choix revient avec classic.SessionStart
+  memoire.effacer()
+  await $.classic.SessionStart({ source: 'clear' } as never)
+  const apres = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await apres.find({ text: /■ / })).toBeUndefined()
+  await apres.unmount()
+})
+
+test('/suivi déjà pris par un autre plugin : le suivi démarre quand même et le dit', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const w = monde(on, 'pris')
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await ui.find({ text: /▶ / })).toBeDefined()
+  await ui.unmount()
+  expect(w.toasts.some(t => t.startsWith("orchestre-suivi : /suivi n'a pas pu être ajoutée"))).toBe(true)
+})
+
+test('après /clear : le plan choisi par /suivi plans/<nom> revient, et suivi.json est relu sans attendre', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const memoire = etat(on)
+  const AUTRE = `${RACINE}/plans/autre/suivi.json`
+  const fichiers: Record<string, { texte: string; mtime: number }> = {
+    [SUIVI]: { texte: doc([tache('T01', 1, { etape: 'worker', isole: true })]), mtime: 2 },
+    [AUTRE]: { texte: doc([tache('A01', 1, { etape: 'worker', isole: true })], { plan: 'autre', dossier: 'plans/autre' }), mtime: 1 },
+  }
+  bas(on)
+  on('fs.exists', ($, e) => ({ value: e.path === `${RACINE}/plans` || e.path in fichiers }))
+  on('fs.list', () => ({ value: ['demo', 'autre'].map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })) }))
+  on('fs.stat', ($, e) => { const f = fichiers[e.path]; return f ? { value: { kind: 'file' as const, size: f.texte.length, mtimeMs: f.mtime, isLink: false } } : { deny: 'ENOENT' } })
+  on('fs.read', ($, e) => { const f = fichiers[e.path]; return f ? { value: f.texte } : { deny: 'ENOENT' } })
+  on('ui.toast', () => ({ value: undefined }))
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  const choix = await $.command.run({ command: 'suivi', args: 'plans/autre texte', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as never)
+  expect(choix.text ?? '').toMatch(/^▶ autre /)
+  // Ce que /clear laisse : $.state à ses valeurs par défaut, le minuteur toujours là mais pas encore passé
+  memoire.effacer()
+  await $.classic.SessionStart({ source: 'clear' } as never)
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await ui.find({ text: /▶ / })).toBeDefined()
+  expect(await ui.find({ text: /^autre$/ })).toBeDefined()
+  await ui.unmount()
 })

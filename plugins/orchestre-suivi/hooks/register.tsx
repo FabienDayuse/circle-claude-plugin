@@ -10,7 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Instantane, Ligne, Onglet } from '../types'
-import { FORMAT, bandeau, changements, formatDe, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
+import { DUREE_IMPORTANTE_MS, FORMAT, bandeau, changements, formatDe, importante, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
 
 const PANNEAU = 'orchestre-suivi'
 const RELIRE_MS = 2000
@@ -23,6 +23,14 @@ const onglet = atom({ plugin: 'orchestre-suivi', key: 'onglet' } as const, 'tach
 const masque = atom({ plugin: 'orchestre-suivi', key: 'masque' } as const, null)
 const alerte = atom({ plugin: 'orchestre-suivi', key: 'alerte' } as const, null)
 const tic = atom({ plugin: 'orchestre-suivi', key: 'tic' } as const, 0)
+
+// Place du bouton « Masquer » (« 0: Masquer ») à la suite du bandeau
+const RESERVE_MASQUER = 12
+
+// /clear, /resume et /branch remettent $.state à ses valeurs par défaut sans relancer session.start : les deux choix de
+// la personne y sont gardés aussi, pour les rétablir (classic.SessionStart). Un rechargement du module, lui, garde $.state.
+let planChoisi: string | null = null
+let masqueChoisi: number | null = null
 
 const parent = (p: string) => p.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || '/'
 
@@ -84,7 +92,7 @@ async function rafraichir($: EngineInterface, force: boolean): Promise<void> {
     const format = formatDe(doc) ?? 'inconnu'
     if ((await read($, alerte)) !== format) {
       await update($, alerte, () => format)
-      $.ui.toast(`${plan}/suivi.json est au format ${format} ; ce mod lit ${FORMAT}. Mets à jour orchestre-suivi.`)
+      $.ui.toast(`${plan}/suivi.json est au format ${format} ; ce mod lit ${FORMAT}. Mets à jour orchestre-suivi.`, { timeoutMs: DUREE_IMPORTANTE_MS })
     }
     return
   }
@@ -92,7 +100,7 @@ async function rafraichir($: EngineInterface, force: boolean): Promise<void> {
   if (!apres) return
   const avant = await read($, instantane)
   await update($, instantane, () => apres)
-  for (const message of changements(avant, apres)) $.ui.toast(message)
+  for (const message of changements(avant, apres)) $.ui.toast(message, importante(message) ? { timeoutMs: DUREE_IMPORTANTE_MS } : undefined)
 }
 
 // On ne suit que là où quelque chose se dessine : le terminal (REPL), ou une session que l'app de bureau héberge,
@@ -101,9 +109,21 @@ let demarre = false
 async function demarrer($: EngineInterface): Promise<void> {
   if (demarre) return
   demarre = true
-  await $.command.register({ name: 'suivi', description: 'Suivi du plan orchestre : tâches, relectures, journal, bilan', argumentHint: '[plans/<nom> | auto] [texte]', immediate: true })
   await rafraichir($, true).catch(() => undefined)
   $.clock.every(RELIRE_MS, () => { void rafraichir($, false).catch(() => undefined) })
+  // En dernier : un nom déjà pris fait échouer l'enregistrement, et le suivi doit tourner quand même
+  try {
+    await $.command.register({ name: 'suivi', description: 'Suivi du plan orchestre : tâches, relectures, journal, bilan', argumentHint: '[plans/<nom> | auto] [texte]', immediate: true })
+  } catch (err) {
+    $.ui.toast(`orchestre-suivi : /suivi n'a pas pu être ajoutée (${err instanceof Error ? err.message : String(err)}). Le bandeau et les notifications restent actifs.`, { timeoutMs: DUREE_IMPORTANTE_MS })
+  }
+}
+
+// Après /clear, /resume ou /branch : les choix de la personne reviennent, et suivi.json est relu tout de suite
+async function retablir($: EngineInterface): Promise<void> {
+  if (planChoisi) await update($, planSuivi, () => planChoisi)
+  if (masqueChoisi != null) await update($, masque, () => masqueChoisi)
+  await rafraichir($, true).catch(() => undefined)
 }
 
 export const register: Register = on => {
@@ -119,35 +139,54 @@ export const register: Register = on => {
     return r
   })
 
+  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
+    const r = await next(e)
+    if (demarre) await retablir($)
+    return r
+  })
+
   // /suivi répond tout de suite, même pendant un tour : le panneau, ou l'état en texte
   on('command.run', { command: 'suivi' }, async ($, e) => {
     const mots = e.args.trim().split(/\s+/).filter(Boolean)
     const plan = mots.find(m => m.startsWith('plans/'))
-    if (plan) await update($, planSuivi, () => plan.replace(/\/+$/, ''))
-    if (mots.includes('auto')) await update($, planSuivi, () => null)
+    if (plan) {
+      planChoisi = plan.replace(/\/+$/, '')
+      await update($, planSuivi, () => planChoisi)
+    }
+    if (mots.includes('auto')) {
+      planChoisi = null
+      await update($, planSuivi, () => null)
+    }
     await rafraichir($, true).catch(() => undefined)
     const inst = await read($, instantane)
     if (!inst) return { text: 'orchestre-suivi : aucun plans/<nom>/suivi.json dans ce dépôt. Il apparaît au premier run d\'orchestre 0.8 ou plus.' }
     const maintenant = await $.clock.now()
     if (mots.includes('texte')) return { text: texteEtat(inst, maintenant) }
-    const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}`, focus: true }).catch(() => null)
+    const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}`, focus: true, closeOnEscape: true }).catch(() => null)
     return ouvert?.isPlaced ? { text: `Suivi de ${inst.plan} ouvert dans le panneau.` } : { text: texteEtat(inst, maintenant) }
   })
 
-  // Le bandeau : pendant un run, puis l'état de fin jusqu'à ce qu'on le masque ou qu'un run reparte
+  // Le bandeau : pendant un run, puis l'état de fin jusqu'à ce qu'on le masque ou qu'un run reparte. La bande est partagée :
+  // ce que dessinent les mods suivants (next) reste dessous. « Masquer » a la touche 0, qui marche aussi tapée seule dans
+  // un prompt vide, sans donner le focus au bandeau.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inst = await read($, instantane)
     await read($, tic)
     if (!inst || !inst.run || e.props.hasSurvey) return next(e)
-    if (inst.run.statut !== 'en-cours' && (await read($, masque)) === inst.run.numero) return next(e)
-    const ligne = bandeau(inst, await $.clock.now(), e.props.bodyColumns)
+    const fini = inst.run.statut !== 'en-cours'
+    if (fini && (await read($, masque)) === inst.run.numero) return next(e)
+    const ligne = bandeau(inst, await $.clock.now(), e.props.bodyColumns, fini ? RESERVE_MASQUER : 0)
     if (!ligne) return next(e)
+    const autres = await next(e)
     const { Box, Button } = $.ui.resolve(e)
     const numero = inst.run.numero
     return (
-      <Box flexDirection="row">
-        {dessiner($, e, ligne, 'bandeau')}
-        {inst.run.statut !== 'en-cours' && <Button key="masquer" label="Masquer" plain onPress={() => update($, masque, () => numero)} />}
+      <Box flexDirection="column">
+        <Box key="orchestre" flexDirection="row">
+          {dessiner($, e, ligne, 'bandeau')}
+          {fini && <Button key="masquer" label="Masquer" hotkey="0" plain onPress={() => { masqueChoisi = numero; return update($, masque, () => numero) }} />}
+        </Box>
+        {autres}
       </Box>
     )
   })

@@ -130,6 +130,14 @@ node tests/demo-suivi.mjs ~/tmp/orchestre-demo
 
 Elle indique la session à ouvrir dans le dépôt créé (`claude --plugin-dir <clone>/plugins/orchestre-suivi`, ou `claude` si le mod est installé), puis attend Entrée avant chaque run. Un pas toutes les 4 s (`--pas <ms>` pour changer). Ce qui diffère dans la session vient du chargement ou du dessin du mod, pas des données.
 
+Si le mod ne montre rien ([dépannage des mods](https://code.claude.com/docs/en/plugins/mods/troubleshoot)) :
+
+- `claude --version` : 2.1.287 ou plus ;
+- `claude plugin test`, lancé dans un dossier sans mod, doit dire « no hooks module to load » ; sinon un réglage (`disableAllHooks`) ou une politique de l'organisation bloque les mods ;
+- l'invite de confiance du dossier doit avoir été acceptée ;
+- `/plugin` doit nommer `orchestre-suivi` sur la ligne des mods actifs ;
+- avec `--plugin-dir`, une ligne de la transcription dit pourquoi un dessin est refusé (`refused:`) ou un hook sauté (`hook skipped:`) ; pour un mod installé, ces lignes ne vont qu'au journal : `claude --debug-file mod.log`, puis chercher `orchestre-suivi` dans `mod.log`.
+
 ## Mettre à jour
 
 Entre deux runs, jamais pendant :
@@ -215,7 +223,7 @@ tests/
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 12 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont la démo jouée sans pause. Les 4 tests du mod sous le moteur passent par `npm run validate`.
+- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 14 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont la démo jouée sans pause. Les 7 tests du mod sous le moteur passent par `npm run validate`.
 - Validation : `npm run validate` (`claude plugin validate` sur les deux plugins et sur la marketplace, puis `claude plugin test` du mod).
 - Essayer le mod sans l'installer : `claude --plugin-dir plugins/orchestre-suivi` dans le dépôt d'un plan qui a un `suivi.json`, par exemple celui de `tests/demo-suivi.mjs`.
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.

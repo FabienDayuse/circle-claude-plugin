@@ -49,7 +49,8 @@ try {
   cas('pendant un run : bandeau, suffixe du spinner, tâches en cours dans l\'onglet Tâches', () => {
     const b = M.brut(M.bandeau(A, tA, 140))
     assert.match(b, /^▶ demo {2}phase 1\/2 {2}▕░+▏ 0\/4 {2}◐ 2 en cours {2}⏱ 1 min {3}\/suivi pour le détail$/)
-    assert.match(M.brut(M.bandeau(A, tA, 80)), /◐ 2 {2}⏱/, 'version étroite')
+    assert.match(M.brut(M.bandeau(A, tA, 80)), /◐ 2 en cours {2}⏱ 1 min$/, 'sans l\'aide, les libellés tiennent en 80')
+    assert.match(M.brut(M.bandeau(A, tA, 50)), /◐ 2 {2}⏱/, 'libellés courts')
     assert.equal(M.suffixe(A, tA), ' · T01 réalisation · 2 tâches en cours…')
     const t = texte(M.lignesTaches(A, tA, 100))
     assert.match(t, /^◐ Phase 1 {2}0\/2/m); assert.match(t, /◐ T01 +Tâche T01 +réalisation \(worktree\)/); assert.match(t, /◐ T02 .*vérification/)
@@ -155,6 +156,29 @@ try {
     assert.ok(M.changements(G2, H).includes('Run 2 (phases 1 à 2) : terminé'), M.changements(G2, H).join(' | '))
     assert.ok(M.changements(B, C).includes('Run 1 (phase 1) : arbitrage'), 'un run d\'une phase garde « phase 1 »')
     assert.notEqual(M.phasesDe(H, tE)[1].duree, null, 'la phase 2 a une durée, bien que run.phase vaille 1')
+  })
+
+  cas('bandeau : tient dans la largeur donnée, place du bouton comprise, en gardant l\'essentiel', () => {
+    const tard = (A.maj ?? 0) + M.SILENCE_MS + 60000
+    for (const [X, t, reserve] of [[A, tA, 0], [C, tA, 12], [A, tard, 0], [H, tE, 12]]) {
+      for (const w of [160, 140, 120, 110, 100, 90, 80, 70, 62, 60, 50, 40, 20]) {
+        const l = M.bandeau(X, t, w, reserve)
+        // Sur ce petit plan, la forme la plus courte tient en 50 cellules ; en deçà, l'affichage coupe la fin
+        if (w - reserve >= 50) assert.ok(M.largeur(l) <= w - reserve, `${w} - ${reserve} : ${M.largeur(l)} « ${M.brut(l)} »`)
+        assert.match(M.brut(l), /^[▶■✓◌] demo {2}phase \d\/\d /, 'nom et phase toujours là')
+        assert.match(M.brut(l), /\d\/\d+/, 'avancement toujours là')
+      }
+    }
+    assert.match(M.brut(M.bandeau(C, tA, 160, 12)), /⚠ 1 à toi {2}run 1 arbitrage {2}⏱ .*\/suivi pour le détail$/)
+    assert.match(M.brut(M.bandeau(C, tA, 62, 12)), /⚠ 1 {2}(run 1 )?arbitrage$/, 'en 50 cellules : ce qui attend et le statut du run, sans la durée')
+    const serre = M.bandeau(C, tA, 56, 12)
+    assert.ok(M.largeur(serre) <= 44, M.brut(serre)); assert.match(M.brut(serre), /⚠ 1 {2}arbitrage$/, 'en 44 : le statut sans le numéro du run')
+  })
+
+  cas('notifications qui demandent quelqu\'un : affichées plus longtemps', () => {
+    for (const m of ['⚑ T02 attend un humain', '✗ T03 bloquée', '✗ T03 en échec', 'Run arrêté : T02, Secret manquant', 'Run 2 (phase 1) : erreur']) assert.ok(M.importante(m), m)
+    for (const m of ['⚑ T01 : à relire avant la PR', 'Phase 1 terminée', 'Run 1 lancé : phase 1, mode auto', 'Run 1 (phase 1) : arbitrage', 'Run 2 (phases 1 à 2) : terminé']) assert.ok(!M.importante(m), m)
+    assert.ok(M.DUREE_IMPORTANTE_MS > 4000)
   })
 
   cas('mise en forme : durées, âges, barre, coupe', () => {
