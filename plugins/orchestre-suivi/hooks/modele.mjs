@@ -6,6 +6,7 @@
 /** @typedef {import('../types/index.d.ts').Instantane} Instantane */
 /** @typedef {import('../types/index.d.ts').TacheVue} TacheVue */
 /** @typedef {import('../types/index.d.ts').PhaseVue} PhaseVue */
+/** @typedef {import('../types/index.d.ts').RunVue} RunVue */
 /** @typedef {import('../types/index.d.ts').Morceau} Morceau */
 /** @typedef {import('../types/index.d.ts').Ligne} Ligne */
 
@@ -58,8 +59,8 @@ export function normaliser(brut) {
   return {
     plan: texte(brut.plan), dossier: texte(brut.dossier), maj: date(brut.maj),
     taches,
-    runs: runs.map(r => ({ numero: entier(r.numero, 0), phase: entier(r.phase, 0), mode: texte(r.mode), statut: texte(r.statut), debut: date(r.debut), fin: date(r.fin), detail: r.detail == null ? null : texte(r.detail) })),
-    run: dernier ? { numero: entier(dernier.numero, 0), phase: entier(dernier.phase, 0), mode: texte(dernier.mode), statut: texte(dernier.statut), debut: date(dernier.debut), fin: date(dernier.fin), detail: dernier.detail == null ? null : texte(dernier.detail) } : null,
+    runs: runs.map(runVue),
+    run: dernier ? runVue(dernier) : null,
     relectures: (Array.isArray(brut.relectures) ? brut.relectures : []).filter(estObjet).map(r => ({ tache: r.tache == null ? null : texte(r.tache), phase: Number.isInteger(r.phase) ? r.phase : null, texte: texte(r.texte), quand: date(r.quand) })),
     decisions: (Array.isArray(brut.decisions_office) ? brut.decisions_office : []).filter(estObjet).map(d => ({ tache: texte(d.tache), titre: texte(d.titre), option: texte(d.option), description: texte(d.description) })),
     points: (Array.isArray(brut.points) ? brut.points : []).filter(p => estObjet(p) && p.statut !== 'tranché').map(p => ({ tache: texte(p.tache), titre: texte(p.titre), humain: p.humain === true, role: texte(p.role) })),
@@ -70,6 +71,12 @@ export function normaliser(brut) {
   }
 }
 
+/** @param {Record<string, unknown>} r @returns {RunVue} */
+const runVue = r => ({
+  numero: entier(r.numero, 0), phase: entier(r.phase, 0), mode: texte(r.mode), statut: texte(r.statut), debut: date(r.debut), fin: date(r.fin), detail: r.detail == null ? null : texte(r.detail),
+  arbitres: (Array.isArray(r.arbitrages_appliques) ? r.arbitrages_appliques : []).filter(estObjet).map(a => texte(a.tache)).filter(Boolean),
+})
+
 const fait = /** @param {TacheVue} t */ t => t.statut === 'fusionnée'
 /** Le run noté en cours, s'il y en a un. @param {Instantane} inst */
 export const runEnCours = inst => (inst.run && inst.run.statut === 'en-cours' ? inst.run : null)
@@ -79,6 +86,24 @@ export const silencieux = (inst, maintenant) => !!runEnCours(inst) && inst.maj !
 export const runActif = (inst, maintenant) => (silencieux(inst, maintenant) ? null : runEnCours(inst))
 /** Une tâche en cours : une étape notée pendant un run actif. @param {Instantane} inst @param {number} maintenant */
 export const enCours = (inst, maintenant) => (runActif(inst, maintenant) ? inst.taches.filter(t => t.etape && !fait(t)) : [])
+/** Le point de la tâche vient d'être tranché par le run en cours, qui va la relancer. @param {Instantane} inst @param {TacheVue} t */
+const arbitree = (inst, t) => { const r = runEnCours(inst); return !!r && r.arbitres.includes(t.id) }
+/**
+ * Ce qui attend quelqu'un : une tâche qui a besoin d'un humain, bloquée ou en échec, sauf si le run en cours l'a reprise
+ * (une étape notée pendant un run actif) ou vient d'en trancher le point. @param {Instantane} inst @param {number} maintenant
+ */
+export const attendQuelquun = (inst, maintenant) => { const actif = !!runActif(inst, maintenant); return /** @param {TacheVue} t */ t => t.statut in ATTENTION && !(actif && t.etape) && !arbitree(inst, t) }
+/**
+ * La phase où en est le dernier run : la plus haute des tâches qu'il a démarrées ou closes, au moins celle de son départ.
+ * Un run en mode auto passe d'une phase à l'autre, et run.phase reste celle du départ. @param {Instantane} inst
+ */
+export function phaseDuRun(inst) {
+  const r = inst.run
+  if (!r) return null
+  const d = r.debut
+  const touchees = d == null ? [] : inst.taches.filter(t => t.statut !== 'annulée' && ((t.debut != null && t.debut >= d) || (t.fin != null && t.fin >= d)))
+  return Math.max(r.phase, ...touchees.map(t => t.phase))
+}
 
 /**
  * Les chiffres du bandeau et des en-têtes. @param {Instantane} inst @param {number} maintenant ms
@@ -89,7 +114,7 @@ export function resumer(inst, maintenant) {
   const phases = phasesDe(inst, maintenant)
   const courante = phases.find(p => p.faites < p.total) ?? null
   const run = runActif(inst, maintenant)
-  const attention = actives.filter(t => t.statut in ATTENTION)
+  const attention = actives.filter(attendQuelquun(inst, maintenant))
   return {
     total: actives.length, faites, enCours: enCours(inst, maintenant), aFaire: actives.filter(t => !fait(t)).length, silence: silencieux(inst, maintenant),
     phases, courante, phaseMax: phases.at(-1)?.numero ?? 0,
@@ -103,14 +128,26 @@ export function resumer(inst, maintenant) {
 export function phasesDe(inst, maintenant) {
   // Une phase dont toutes les tâches sont annulées n'est plus une phase du plan, comme pour /orchestre:etat
   const nums = [...new Set(inst.taches.filter(t => t.statut !== 'annulée').map(t => t.phase))].sort((a, b) => a - b)
+  const attend = attendQuelquun(inst, maintenant)
   return nums.map(numero => {
     const ts = inst.taches.filter(t => t.phase === numero && t.statut !== 'annulée')
-    const runs = inst.runs.filter(r => r.phase === numero && r.debut != null)
-    const duree = runs.length ? runs.reduce((s, r) => s + Math.max(0, (r.fin ?? (r.statut === 'en-cours' ? maintenant : /** @type {number} */ (r.debut))) - /** @type {number} */ (r.debut)), 0) : null
+    // Dans chaque run, du premier démarrage au dernier achèvement des tâches de la phase : un run en mode auto en parcourt
+    // plusieurs, et l'attente entre deux runs ne compte pas
+    let duree = /** @type {number | null} */ (null)
+    for (const r of inst.runs) {
+      if (r.debut == null) continue
+      const d = r.debut, f = r.fin ?? (r.statut === 'en-cours' ? maintenant : d)
+      const dans = /** @param {number | null} x */ x => x != null && x >= d && x <= f
+      const vues = ts.filter(t => dans(t.debut) || dans(t.fin))
+      if (!vues.length) continue
+      const a = Math.min(...vues.map(t => (dans(t.debut) ? /** @type {number} */ (t.debut) : d)))
+      const b = Math.max(...vues.map(t => (dans(t.fin) ? /** @type {number} */ (t.fin) : f)))
+      duree = (duree ?? 0) + Math.max(0, b - a)
+    }
     return {
       numero, total: ts.length, faites: ts.filter(fait).length,
       enCours: ts.filter(t => t.etape && !fait(t) && runActif(inst, maintenant)).length,
-      attention: ts.filter(t => t.statut in ATTENTION).length,
+      attention: ts.filter(attend).length,
       essais: ts.reduce((s, t) => s + Math.max(t.essais, fait(t) ? 1 : 0), 0),
       relances: ts.filter(t => t.essais > 1).map(t => ({ id: t.id, essais: t.essais })),
       duree,
@@ -149,14 +186,16 @@ export function court(s, n) {
 export const colonne = (s, n) => { const c = court(s, n); return c + ' '.repeat(Math.max(0, n - [...c].length)) }
 /** @param {number} n @param {string} mot */
 const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`
+/** « phase 2 », ou « phases 1 à 3 » pour un run qui en a parcouru plusieurs. @param {number} de @param {number} a */
+const libellePhases = (de, a) => (a > de ? `phases ${de} à ${a}` : `phase ${de}`)
 
 /** Glyphe et couleur d'une tâche. @param {TacheVue} t @param {boolean} active @returns {Morceau} */
 export function glyphe(t, active) {
   if (t.statut === 'fusionnée') return { t: '●', c: 'success' }
   if (t.statut === 'annulée') return { t: '–', d: true }
+  if (active && t.etape) return { t: '◐', c: 'suggestion' }
   if (t.statut === 'besoin-humain') return { t: '⚑', c: 'warning' }
   if (t.statut === 'bloquée' || t.statut === 'échec') return { t: '✗', c: 'error' }
-  if (active && t.etape) return { t: '◐', c: 'suggestion' }
   return { t: '○', d: true }
 }
 /** @param {PhaseVue} p @returns {Morceau} */
@@ -168,10 +207,11 @@ function glyphePhase(p) {
 }
 const ETAPES = /** @type {Record<string, string>} */ ({ worker: 'réalisation', vérification: 'vérification', évaluation: 'évaluation', correction: 'correction', fusion: 'fusion', replanification: 'replanification', suivi: 'suivi' })
 
-/** Ce que fait une tâche, en quelques mots. @param {TacheVue} t @param {boolean} active */
-export function quoi(t, active) {
-  if (t.statut in ATTENTION) return /** @type {Record<string, string>} */ (ATTENTION)[t.statut] + (t.blocage[0] ? ` : ${t.blocage[0]}` : '')
+/** Ce que fait une tâche, en quelques mots. @param {TacheVue} t @param {boolean} active @param {boolean} [tranchee] */
+export function quoi(t, active, tranchee = false) {
   if (active && t.etape) return (ETAPES[t.etape] || t.etape) + (t.essais > 1 ? `, essai ${t.essais}` : '') + (t.isole ? ' (worktree)' : '')
+  if (t.statut in ATTENTION && tranchee) return 'point tranché, reprise à venir'
+  if (t.statut in ATTENTION) return /** @type {Record<string, string>} */ (ATTENTION)[t.statut] + (t.blocage[0] ? ` : ${t.blocage[0]}` : '')
   if (t.statut === 'fusionnée') return t.essais > 1 ? `${t.essais} essais` : ''
   return t.attend.length ? `attend ${t.attend.slice(0, 4).join(', ')}${t.attend.length > 4 ? '…' : ''}` : ''
 }
@@ -188,7 +228,7 @@ export function bandeau(inst, maintenant, colonnes) {
   const tete = s.silence ? { t: '◌ ', c: 'warning' } : enCoursRun ? { t: '▶ ', c: 'claude' } : inst.run.statut === 'terminé' ? { t: '✓ ', c: 'success' } : { t: '■ ', c: 'warning' }
   /** @type {Ligne} */
   const l = [{ ...tete, b: true }, { t: court(inst.plan, etroit ? 16 : 28), b: true }]
-  const phase = runEnCours(inst) ? inst.run.phase : s.courante ? s.courante.numero : inst.run.phase
+  const phase = phaseDuRun(inst)
   l.push({ t: `  phase ${phase}/${s.phaseMax}`, d: true })
   l.push({ t: '  ▕', d: true }, { t: barre(s.faites, s.total, etroit ? 8 : 14), c: 'success' }, { t: '▏', d: true }, { t: ` ${s.faites}/${s.total}` })
   if (s.enCours.length) l.push({ t: `  ◐ ${s.enCours.length}${etroit ? '' : ' en cours'}`, c: 'suggestion' })
@@ -225,9 +265,10 @@ export function lignesTaches(inst, maintenant, colonnes) {
     const montrer = courante || p.attention > 0 || p.enCours > 0
     if (!montrer) continue
     const ts = inst.taches.filter(t => t.phase === p.numero && t.statut !== 'annulée' && !fait(t))
+    const attend = attendQuelquun(inst, maintenant)
     const aFaire = ts.filter(t => !(t.statut in ATTENTION) && !(actif && t.etape))
     for (const t of ts.filter(t => (t.statut in ATTENTION) || (actif && t.etape))) {
-      out.push([{ t: '    ' }, glyphe(t, actif), { t: ` ${colonne(t.id, 6)} ${colonne(t.titre, larg)} ` }, { t: court(quoi(t, actif), Math.max(10, colonnes - larg - 14)), c: t.statut in ATTENTION ? 'warning' : 'subtle' }, { t: t.debut != null && actif && t.etape ? `  ${duree(maintenant - t.debut)}` : '', d: true }])
+      out.push([{ t: '    ' }, glyphe(t, actif), { t: ` ${colonne(t.id, 6)} ${colonne(t.titre, larg)} ` }, { t: court(quoi(t, actif, arbitree(inst, t)), Math.max(10, colonnes - larg - 14)), c: attend(t) ? 'warning' : 'subtle' }, { t: t.debut != null && actif && t.etape ? `  ${duree(maintenant - t.debut)}` : '', d: true }])
     }
     for (const t of aFaire.slice(0, 6)) out.push([{ t: '    ' }, glyphe(t, actif), { t: ` ${colonne(t.id, 6)} ${colonne(t.titre, larg)} `, d: true }, { t: court(quoi(t, actif), Math.max(10, colonnes - larg - 14)), d: true }])
     if (aFaire.length > 6) out.push([{ t: `    ○ ${aFaire.length - 6} autres à faire`, d: true }])
@@ -319,7 +360,7 @@ export function changements(avant, apres) {
   const m = []
   const ra = avant.run, rb = apres.run
   if (rb && (!ra || rb.numero !== ra.numero)) m.push(`Run ${rb.numero} lancé : phase ${rb.phase}, mode ${rb.mode}`)
-  if (rb && ra && rb.numero === ra.numero && ra.statut === 'en-cours' && rb.statut !== 'en-cours') m.push(`Run ${rb.numero} (phase ${rb.phase}) : ${rb.statut}${rb.detail ? `, ${court(rb.detail, 80)}` : ''}`)
+  if (rb && ra && rb.numero === ra.numero && ra.statut === 'en-cours' && rb.statut !== 'en-cours') m.push(`Run ${rb.numero} (${libellePhases(rb.phase, phaseDuRun(apres) ?? rb.phase)}) : ${rb.statut}${rb.detail ? `, ${court(rb.detail, 80)}` : ''}`)
   const av = new Map(avant.taches.map(t => [t.id, t]))
   for (const t of apres.taches) {
     const a = av.get(t.id)

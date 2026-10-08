@@ -28,7 +28,7 @@ Dans une session Claude Code :
 /reload-plugins
 ```
 
-`orchestre-suivi` est un mod (des hooks de fonctions, une fonction encore en accès anticipé de Claude Code) : il n'a été vérifié qu'avec le kit de test de Claude Code 2.1.294, et la version minimale qui charge les mods est une donnée à collecter. Sur une version qui ne les charge pas, seul ce plugin est concerné.
+`orchestre-suivi` est un mod (des hooks de fonctions) : il faut Claude Code 2.1.287 ou plus (`claude --version`), version à partir de laquelle les mods sont actifs par défaut ([doc des mods](https://code.claude.com/docs/en/plugins/mods/overview)). Il dessine dans le terminal et dans l'onglet Code de l'app de bureau ; dans le panneau de l'extension VS Code, sous `claude -p` et dans une session cloud, rien ne se dessine. `/plugin` dit s'il est chargé : la ligne sous les onglets nomme les mods actifs. Sur une version plus ancienne, seul ce plugin est concerné.
 
 Ou depuis un terminal :
 
@@ -120,6 +120,16 @@ cd ~/tmp/orchestre-jouet && claude
 
 Puis `/orchestre:installer`, une session neuve, `/orchestre:pret plans/demo` et `/orchestre:lancer plans/demo`.
 
+### Voir le mod sans lancer de run
+
+Une démo joue deux runs d'un plan de 5 tâches avec le vrai `suivi.mjs`, sans agent ni modèle, et affiche après chaque pas ce que le mod doit montrer (bandeau, spinner, notifications, bilan) :
+
+```sh
+node tests/demo-suivi.mjs ~/tmp/orchestre-demo
+```
+
+Elle indique la session à ouvrir dans le dépôt créé (`claude --plugin-dir <clone>/plugins/orchestre-suivi`, ou `claude` si le mod est installé), puis attend Entrée avant chaque run. Un pas toutes les 4 s (`--pas <ms>` pour changer). Ce qui diffère dans la session vient du chargement ou du dessin du mod, pas des données.
+
 ## Mettre à jour
 
 Entre deux runs, jamais pendant :
@@ -198,15 +208,16 @@ tests/
 ├── suivi.test.mjs                   suivi.mjs dans des dépôts temporaires
 ├── worktrees.test.mjs               worktrees.mjs dans des dépôts temporaires
 ├── modele.test.mjs                  modèle de réglages de l'installer
-└── depot-jouet.sh                   dépôt jouet pour un essai réel
+├── depot-jouet.sh                   dépôt jouet pour un essai réel
+└── demo-suivi.mjs                   démo du mod : deux runs joués par suivi.mjs
 ```
 
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 9 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`. Les 4 tests du mod sous le moteur passent par `npm run validate`.
+- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 12 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont la démo jouée sans pause. Les 4 tests du mod sous le moteur passent par `npm run validate`.
 - Validation : `npm run validate` (`claude plugin validate` sur les deux plugins et sur la marketplace, puis `claude plugin test` du mod).
-- Essayer le mod sans l'installer : `claude --plugin-dir plugins/orchestre-suivi` dans le dépôt d'un plan qui a un `suivi.json`.
+- Essayer le mod sans l'installer : `claude --plugin-dir plugins/orchestre-suivi` dans le dépôt d'un plan qui a un `suivi.json`, par exemple celui de `tests/demo-suivi.mjs`.
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
 - Publier une version :
   1. monter `version` dans `plugins/<plugin>/.claude-plugin/plugin.json` du plugin modifié : sans cela, personne ne reçoit la mise à jour ;

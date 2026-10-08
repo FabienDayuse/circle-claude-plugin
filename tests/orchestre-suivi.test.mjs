@@ -117,9 +117,61 @@ try {
     assert.match(M.brut(M.bandeau(X, tA, 140)), /phase 1\/1 .* 1\/2/)
   })
 
+  // Run 2 en mode auto : le premier scribe tranche le point de T02, T02 reprend, puis la phase 2
+  suivi('debut-run', { phase: 1, mode: 'auto', parallelisme: 2, corrections_max: 2, decisions_office_max: 3 })
+  suivi('arbitrage', { tache: 'T02', titre: 'Secret manquant', option: 'A' })
+  const E = lire(), tE = Date.parse(JSON.parse(readFileSync(join(d, 'suivi.json'), 'utf8')).maj) + 1000
+  suivi('etape', { tache: 'T02', etape: 'worker', isole: true })
+  const F = lire()
+
+  cas('reprise après arbitrage : la tâche n\'attend plus personne, ni une fois tranchée, ni pendant sa reprise', () => {
+    assert.equal(M.resumer(C, tA).attention.length, 1, 'avant le run 2, T02 attend un humain')
+    assert.deepEqual(M.resumer(E, tE).attention, []); assert.doesNotMatch(M.brut(M.bandeau(E, tE, 140)), /à toi/)
+    assert.match(texte(M.lignesTaches(E, tE, 100)), /⚑ T02 .*point tranché, reprise à venir/)
+    assert.deepEqual(M.resumer(F, tE).attention, []); assert.match(M.brut(M.bandeau(F, tE, 140)), /◐ 1 en cours/)
+    assert.match(texte(M.lignesTaches(F, tE, 100)), /◐ T02 +Tâche T02 +réalisation \(worktree\)/)
+    assert.equal(M.resumer(F, tE).phases[0].attention, 0)
+    // Reprise sans arbitrage dans ce run (tâche bloquée relancée, point réglé ailleurs) : l'étape suffit
+    const brutF = JSON.parse(readFileSync(join(d, 'suivi.json'), 'utf8'))
+    brutF.runs.at(-1).arbitrages_appliques = []
+    const R = M.normaliser(brutF)
+    assert.deepEqual(M.resumer(R, tE).attention, []); assert.equal(M.resumer(R, tE).phases[0].attention, 0)
+    assert.equal(M.resumer(R, R.maj + M.SILENCE_MS + 1000).attention.length, 1, 'run silencieux : la tâche attend de nouveau')
+  })
+
+  suivi('cloture', { tache: 'T02', statut: 'fusionnée', essais: 2, branche: 'tache/T02' })
+  suivi('etape', { tache: 'T03', etape: 'worker', isole: true })
+  const G2 = lire()
+  suivi('cloture', { tache: 'T03', statut: 'fusionnée', essais: 1, branche: 'tache/T03' })
+  suivi('cloture', { tache: 'T04', statut: 'fusionnée', essais: 1, branche: 'tache/T04' })
+  suivi('fin-run', { statut: 'terminé', phase: 2, mode: 'auto', points_a_trancher: [], taches: [], non_lancees: [], reportees: [], taches_ajoutees: [], arbitrages_appliques: [], decisions_office: [], amendements_ecartes: [], en_attente: [], en_attente_prerequis: [] })
+  const H = lire()
+
+  cas('run en mode auto : le bandeau suit la phase atteinte, la fin de run nomme les phases, chaque phase a sa durée', () => {
+    assert.equal(G2.run.phase, 1, 'run.phase reste la phase de départ')
+    assert.match(M.brut(M.bandeau(G2, tE, 140)), /^▶ demo {2}phase 2\/2 /)
+    assert.equal(M.phaseDuRun(E), 1, 'avant toute étape, la phase de départ')
+    assert.match(M.brut(M.bandeau(H, tE, 140)), /^✓ demo {2}phase 2\/2 .* 4\/4 /)
+    assert.ok(M.changements(G2, H).includes('Run 2 (phases 1 à 2) : terminé'), M.changements(G2, H).join(' | '))
+    assert.ok(M.changements(B, C).includes('Run 1 (phase 1) : arbitrage'), 'un run d\'une phase garde « phase 1 »')
+    assert.notEqual(M.phasesDe(H, tE)[1].duree, null, 'la phase 2 a une durée, bien que run.phase vaille 1')
+  })
+
   cas('mise en forme : durées, âges, barre, coupe', () => {
     assert.deepEqual([M.duree(45000), M.duree(18 * 60000), M.duree(72 * 60000), M.duree(null)], ['45 s', '18 min', '1 h 12', '—'])
     assert.equal(M.age(0, 3 * 86400000), '3 j'); assert.equal(M.barre(1, 4, 8), '██░░░░░░'); assert.equal(M.court('abcdef', 4), 'abc…')
+  })
+
+  cas('démo (tests/demo-suivi.mjs) : deux runs joués par le vrai suivi.mjs, sans pause hors d\'un terminal', () => {
+    const r = spawnSync(process.execPath, [resolve('tests/demo-suivi.mjs'), join(racine, 'demo'), '--pas', '0'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    assert.equal(r.status, 0, r.stderr)
+    assert.doesNotMatch(r.stdout, /^ 1\. .*\n +bandeau .*\n +notification/m, 'premier suivi.json : rien à notifier')
+    for (const attendu of ['notification Run 2 lancé : phase 1, mode auto', 'notification ⚑ T03 attend un humain', 'notification Run arrêté : T03, Clé SMTP de test', 'notification Phase 1 terminée', 'notification Run 2 (phases 1 à 2) : terminé']) assert.ok(r.stdout.includes(attendu), attendu)
+    assert.match(r.stdout, /^17\. .*\n +bandeau +▶ demo {2}phase 2\/2 /m)
+    const Z = M.normaliser(JSON.parse(readFileSync(join(racine, 'demo', 'plans', 'demo', 'suivi.json'), 'utf8')))
+    assert.deepEqual([Z.runs.length, Z.run.statut, Z.taches.filter(t => t.statut === 'fusionnée').length, Z.relectures.length, Z.decisions.length], [2, 'terminé', 5, 3, 1])
+    const deja = spawnSync(process.execPath, [resolve('tests/demo-suivi.mjs'), join(racine, 'demo')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    assert.equal(deja.status, 1, 'dossier existant refusé'); assert.match(deja.stderr, /existe déjà/)
   })
 
   console.log(`orchestre-suivi : TOUT EST VERT (${n} cas)`)

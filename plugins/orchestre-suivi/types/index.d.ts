@@ -25,6 +25,8 @@ export type RunVue = {
   debut: number | null
   fin: number | null
   detail: string | null
+  // Tâches dont ce run a appliqué un arbitrage (arbitrages_appliques)
+  arbitres: string[]
 }
 
 export type PhaseVue = {
