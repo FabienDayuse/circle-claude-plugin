@@ -1,0 +1,220 @@
+// Mod orchestre-suivi : suit un run du plugin orchestre dans la session pilote, en lecture seule.
+// Il lit plans/<nom>/suivi.json (orchestre-suivi/1), que seul scripts/suivi.mjs d'orchestre écrit, et dessine :
+//   - un bandeau au-dessus du prompt pendant un run (phase, avancement, en cours, à relire, durée) ;
+//   - un suffixe au spinner (tâche et étape en cours) ;
+//   - /suivi : un panneau à onglets (Tâches, À relire, Journal, Bilan), ou le même état en texte ;
+//   - une notification quand un run part ou s'arrête, qu'une phase finit, qu'une tâche attend un humain,
+//     est bloquée ou en échec, qu'une relecture ou un point d'arrêt arrive.
+// Il n'écrit jamais dans le dépôt : ses seules écritures sont dans $.state (affichage) et le prompt (« Préparer la PR »).
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
+
+import type { Instantane, Ligne, Onglet } from '../types'
+import { FORMAT, bandeau, changements, formatDe, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
+
+const PANNEAU = 'orchestre-suivi'
+const RELIRE_MS = 2000
+// Pendant un run, les durées du bandeau et du panneau avancent toutes les 30 s, même sans écriture de suivi.json
+const TIC_MS = 30000
+const instantane = atom({ plugin: 'orchestre-suivi', key: 'instantane' } as const, null)
+const planSuivi = atom({ plugin: 'orchestre-suivi', key: 'plan' } as const, null)
+const lu = atom({ plugin: 'orchestre-suivi', key: 'lu' } as const, 0)
+const onglet = atom({ plugin: 'orchestre-suivi', key: 'onglet' } as const, 'taches')
+const masque = atom({ plugin: 'orchestre-suivi', key: 'masque' } as const, null)
+const alerte = atom({ plugin: 'orchestre-suivi', key: 'alerte' } as const, null)
+const tic = atom({ plugin: 'orchestre-suivi', key: 'tic' } as const, 0)
+
+const parent = (p: string) => p.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || '/'
+
+// Le dossier plans/ du dépôt : celui du dossier de la session, sinon d'un dossier parent (4 au plus)
+async function racine($: EngineInterface): Promise<string | null> {
+  let dir = await $.session.cwd()
+  for (let i = 0; i < 5; i++) {
+    if (await $.fs.exists(`${dir}/plans`).catch(() => false)) return dir
+    const haut = parent(dir)
+    if (haut === dir) break
+    dir = haut
+  }
+  return null
+}
+
+// Le plan à suivre : celui que /suivi plans/<nom> a choisi, s'il a un suivi.json ; sinon le suivi.json écrit en dernier,
+// celui du run en cours puisque le workflow l'écrit à chaque transition. Rien n'est lu ici : une liste et des stat.
+async function trouverPlan($: EngineInterface, base: string): Promise<string | null> {
+  const choisi = await read($, planSuivi)
+  if (choisi && (await $.fs.exists(`${base}/${choisi}/suivi.json`).catch(() => false))) return choisi
+  const entrees = await $.fs.list(`${base}/plans`).catch(() => [])
+  let meilleur: { plan: string; mtime: number } | null = null
+  for (const d of entrees.filter(x => x.kind === 'dir').slice(0, 50)) {
+    const st = await $.fs.stat(`${base}/plans/${d.name}/suivi.json`).catch(() => null)
+    if (st && (!meilleur || st.mtimeMs > meilleur.mtime)) meilleur = { plan: `plans/${d.name}`, mtime: st.mtimeMs }
+  }
+  return meilleur?.plan ?? null
+}
+
+async function lireJson($: EngineInterface, chemin: string): Promise<unknown> {
+  try {
+    const t = await $.fs.read(chemin)
+    return typeof t === 'string' ? JSON.parse(t) : null
+  } catch {
+    return null // absent, trop gros ou en cours de renommage : on garde l'affichage précédent
+  }
+}
+
+// Relit suivi.json s'il a changé (ou si c'est un autre fichier), met l'instantané à jour et notifie ce qui le mérite
+let dernierFichier: string | null = null
+async function rafraichir($: EngineInterface, force: boolean): Promise<void> {
+  const base = await racine($)
+  if (!base) return
+  const plan = await trouverPlan($, base)
+  if (!plan) return
+  const f = `${base}/${plan}/suivi.json`
+  const st = await $.fs.stat(f).catch(() => null)
+  if (!st) return
+  if (!force && f === dernierFichier && st.mtimeMs === (await read($, lu))) {
+    const inst = await read($, instantane), maintenant = await $.clock.now()
+    if (inst && runEnCours(inst) && maintenant - (await read($, tic)) >= TIC_MS) await update($, tic, () => maintenant)
+    return
+  }
+  const doc = await lireJson($, f)
+  if (doc === null) return
+  dernierFichier = f
+  await update($, lu, () => st.mtimeMs)
+  if (formatDe(doc) !== FORMAT) {
+    const format = formatDe(doc) ?? 'inconnu'
+    if ((await read($, alerte)) !== format) {
+      await update($, alerte, () => format)
+      $.ui.toast(`${plan}/suivi.json est au format ${format} ; ce mod lit ${FORMAT}. Mets à jour orchestre-suivi.`)
+    }
+    return
+  }
+  const apres = normaliser(doc)
+  if (!apres) return
+  const avant = await read($, instantane)
+  await update($, instantane, () => apres)
+  for (const message of changements(avant, apres)) $.ui.toast(message)
+}
+
+// On ne suit que là où quelque chose se dessine : le terminal (REPL), ou une session que l'app de bureau héberge,
+// qui démarre sans surface et en reçoit une à la connexion de l'app (session.attach). Un `claude -p` ne lit rien.
+let demarre = false
+async function demarrer($: EngineInterface): Promise<void> {
+  if (demarre) return
+  demarre = true
+  await $.command.register({ name: 'suivi', description: 'Suivi du plan orchestre : tâches, relectures, journal, bilan', argumentHint: '[plans/<nom> | auto] [texte]', immediate: true })
+  await rafraichir($, true).catch(() => undefined)
+  $.clock.every(RELIRE_MS, () => { void rafraichir($, false).catch(() => undefined) })
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    const r = await next(e)
+    if (e.isInteractive || e.surface !== null) await demarrer($)
+    return r
+  })
+
+  on('session.attach', async ($, e, next) => {
+    const r = await next(e)
+    await demarrer($)
+    return r
+  })
+
+  // /suivi répond tout de suite, même pendant un tour : le panneau, ou l'état en texte
+  on('command.run', { command: 'suivi' }, async ($, e) => {
+    const mots = e.args.trim().split(/\s+/).filter(Boolean)
+    const plan = mots.find(m => m.startsWith('plans/'))
+    if (plan) await update($, planSuivi, () => plan.replace(/\/+$/, ''))
+    if (mots.includes('auto')) await update($, planSuivi, () => null)
+    await rafraichir($, true).catch(() => undefined)
+    const inst = await read($, instantane)
+    if (!inst) return { text: 'orchestre-suivi : aucun plans/<nom>/suivi.json dans ce dépôt. Il apparaît au premier run d\'orchestre 0.8 ou plus.' }
+    const maintenant = await $.clock.now()
+    if (mots.includes('texte')) return { text: texteEtat(inst, maintenant) }
+    const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}`, focus: true }).catch(() => null)
+    return ouvert?.isPlaced ? { text: `Suivi de ${inst.plan} ouvert dans le panneau.` } : { text: texteEtat(inst, maintenant) }
+  })
+
+  // Le bandeau : pendant un run, puis l'état de fin jusqu'à ce qu'on le masque ou qu'un run reparte
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const inst = await read($, instantane)
+    await read($, tic)
+    if (!inst || !inst.run || e.props.hasSurvey) return next(e)
+    if (inst.run.statut !== 'en-cours' && (await read($, masque)) === inst.run.numero) return next(e)
+    const ligne = bandeau(inst, await $.clock.now(), e.props.bodyColumns)
+    if (!ligne) return next(e)
+    const { Box, Button } = $.ui.resolve(e)
+    const numero = inst.run.numero
+    return (
+      <Box flexDirection="row">
+        {dessiner($, e, ligne, 'bandeau')}
+        {inst.run.statut !== 'en-cours' && <Button key="masquer" label="Masquer" plain onPress={() => update($, masque, () => numero)} />}
+      </Box>
+    )
+  })
+
+  // Le spinner : la tâche et l'étape en cours, et le nombre de tâches qui tournent
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    const inst = await read($, instantane)
+    await read($, tic)
+    const s = inst ? suffixe(inst, await $.clock.now()) : null
+    return s ? next({ ...e, props: { ...e.props, suffix: s } }) : next(e)
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANNEAU }, async ($, e) => {
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const inst = await read($, instantane)
+    if (!inst) return <Text dimColor>Aucun suivi.json lu pour l'instant.</Text>
+    const actif: Onglet = await read($, onglet)
+    await read($, tic)
+    const maintenant = await $.clock.now()
+    const colonnes = e.props.bodyColumns
+    const lignes: Ligne[] =
+      actif === 'relire' ? lignesRelire(inst, maintenant, colonnes)
+      : actif === 'journal' ? lignesJournal(inst, maintenant, colonnes)
+      : actif === 'bilan' ? lignesBilan(inst, maintenant)
+      : lignesTaches(inst, maintenant, colonnes)
+    const ongletBouton = (id: Onglet, libelle: string, touche: string) => (
+      <Button key={`onglet-${id}`} label={id === actif ? `[${libelle}]` : libelle} hotkey={touche} plain variant={id === actif ? 'primary' : 'secondary'} onPress={() => update($, onglet, () => id)} />
+    )
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row">
+          {ongletBouton('taches', 'Tâches', 't')}
+          <Text> </Text>
+          {ongletBouton('relire', `À relire (${inst.relectures.length})`, 'r')}
+          <Text> </Text>
+          {ongletBouton('journal', 'Journal', 'j')}
+          <Text> </Text>
+          {ongletBouton('bilan', 'Bilan', 'b')}
+        </Box>
+        <Text> </Text>
+        {lignes.map((l, i) => dessiner($, e, l, `l${i}`))}
+        {actif === 'bilan' && (
+          <Box flexDirection="row">
+            <Text> </Text>
+            <Button key="pr" label="Préparer la PR dans le prompt" hotkey="p" onPress={() => preparerPR($, inst)} />
+          </Box>
+        )}
+      </Box>
+    )
+  })
+}
+
+async function preparerPR($: EngineInterface, inst: Instantane): Promise<void> {
+  // Ajouté après ce qui est déjà tapé, jamais à sa place
+  const fait = await $.prompt.fill({ text: textePR(inst, await $.clock.now()), mode: 'append' })
+  $.ui.toast(fait.isFilled ? 'Brouillon de PR dans le prompt : relis-le, rien n\'est envoyé.' : 'Le prompt n\'a pas pris le brouillon de PR.')
+}
+
+// Une ligne de morceaux : un Text par morceau, dans une rangée
+function dessiner($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], ligne: Ligne, cle: string) {
+  const { Box, Text } = $.ui.resolve(e)
+  if (!ligne.length) return <Text key={cle}> </Text>
+  return (
+    <Box key={cle} flexDirection="row">
+      {ligne.map((m, i) => (
+        <Text key={`${cle}-${i}`} color={m.c} bold={m.b} dimColor={m.d} wrap="truncate">{m.t}</Text>
+      ))}
+    </Box>
+  )
+}

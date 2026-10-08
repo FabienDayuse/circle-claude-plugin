@@ -1,12 +1,19 @@
 {
   "name": "circle",
   "description": "Plugins Claude Code de Fabien Dauvergne : planification et orchestration de plans de dev.",
-  "owner": { "name": "Fabien Dauvergne" },
+  "owner": {
+    "name": "Fabien Dauvergne"
+  },
   "plugins": [
     {
       "name": "orchestre",
       "source": "./plugins/orchestre",
       "description": "Exécute un plan de dev (plans/<nom>) phase par phase avec des subagents : réalisation, vérification, évaluation, corrections, fusion et suivi."
+    },
+    {
+      "name": "orchestre-suivi",
+      "source": "./plugins/orchestre-suivi",
+      "description": "Mod de suivi d'un run orchestre dans la session pilote : bandeau, spinner, /suivi et notifications, en lecture seule sur plans/<nom>/suivi.json."
     }
   ]
 }
