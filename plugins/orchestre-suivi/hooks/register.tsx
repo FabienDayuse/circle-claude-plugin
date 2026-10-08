@@ -10,19 +10,18 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Instantane, Ligne, Onglet } from '../types'
-import { DUREE_IMPORTANTE_MS, FORMAT, bandeau, changements, formatDe, importante, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
+import { DUREE_IMPORTANTE_MS, FORMAT, IMAGE_MS, bandeau, changements, formatDe, importante, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, nouvelle, runActif, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
 
 const PANNEAU = 'orchestre-suivi'
 const RELIRE_MS = 2000
-// Pendant un run, les durées du bandeau et du panneau avancent toutes les 30 s, même sans écriture de suivi.json
-const TIC_MS = 30000
+// Un run interrompu (« sans nouvelles ») ne s'anime plus : son âge avance toutes les 30 s
+const LENT_MS = 30000
 const instantane = atom({ plugin: 'orchestre-suivi', key: 'instantane' } as const, null)
 const planSuivi = atom({ plugin: 'orchestre-suivi', key: 'plan' } as const, null)
 const lu = atom({ plugin: 'orchestre-suivi', key: 'lu' } as const, 0)
 const onglet = atom({ plugin: 'orchestre-suivi', key: 'onglet' } as const, 'taches')
 const masque = atom({ plugin: 'orchestre-suivi', key: 'masque' } as const, null)
 const alerte = atom({ plugin: 'orchestre-suivi', key: 'alerte' } as const, null)
-const tic = atom({ plugin: 'orchestre-suivi', key: 'tic' } as const, 0)
 
 // Place du bouton « Masquer » (« 0: Masquer ») à la suite du bandeau
 const RESERVE_MASQUER = 12
@@ -79,11 +78,7 @@ async function rafraichir($: EngineInterface, force: boolean): Promise<void> {
   const f = `${base}/${plan}/suivi.json`
   const st = await $.fs.stat(f).catch(() => null)
   if (!st) return
-  if (!force && f === dernierFichier && st.mtimeMs === (await read($, lu))) {
-    const inst = await read($, instantane), maintenant = await $.clock.now()
-    if (inst && runEnCours(inst) && maintenant - (await read($, tic)) >= TIC_MS) await update($, tic, () => maintenant)
-    return
-  }
+  if (!force && f === dernierFichier && st.mtimeMs === (await read($, lu))) return
   const doc = await lireJson($, f)
   if (doc === null) return
   dernierFichier = f
@@ -111,12 +106,26 @@ async function demarrer($: EngineInterface): Promise<void> {
   demarre = true
   await rafraichir($, true).catch(() => undefined)
   $.clock.every(RELIRE_MS, () => { void rafraichir($, false).catch(() => undefined) })
+  $.clock.every(IMAGE_MS, () => { void animer($).catch(() => undefined) })
   // En dernier : un nom déjà pris fait échouer l'enregistrement, et le suivi doit tourner quand même
   try {
     await $.command.register({ name: 'suivi', description: 'Suivi du plan orchestre : tâches, relectures, journal, bilan', argumentHint: '[plans/<nom> | auto] [texte]', immediate: true })
   } catch (err) {
     $.ui.toast(`orchestre-suivi : /suivi n'a pas pu être ajoutée (${err instanceof Error ? err.message : String(err)}). Le bandeau et les notifications restent actifs.`, { timeoutMs: DUREE_IMPORTANTE_MS })
   }
+}
+
+// Les animations : pendant un run actif, et tant qu'une nouvelle a moins de 10 s, tout est redessiné à chaque image
+// (spinner, barre qui pulse, chronos, nouvelle qui s'estompe). Un run sans nouvelles ne bouge plus : toutes les 30 s.
+let dernierRedessin = 0
+async function animer($: EngineInterface): Promise<void> {
+  const inst = await read($, instantane)
+  if (!inst) return
+  const maintenant = await $.clock.now()
+  const vif = !!runActif(inst, maintenant) || !!nouvelle(inst, maintenant)
+  if (!vif && !(runEnCours(inst) && maintenant - dernierRedessin >= LENT_MS)) return
+  dernierRedessin = maintenant
+  $.ui.invalidate('ui.render')
 }
 
 // Après /clear, /resume ou /branch : les choix de la personne reviennent, et suivi.json est relu tout de suite
@@ -171,19 +180,19 @@ export const register: Register = on => {
   // un prompt vide, sans donner le focus au bandeau.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inst = await read($, instantane)
-    await read($, tic)
     if (!inst || !inst.run || e.props.hasSurvey) return next(e)
     const fini = inst.run.statut !== 'en-cours'
     if (fini && (await read($, masque)) === inst.run.numero) return next(e)
-    const ligne = bandeau(inst, await $.clock.now(), e.props.bodyColumns, fini ? RESERVE_MASQUER : 0)
+    const ligne = bandeau(inst, await $.clock.now(), e.props.bodyColumns, fini ? RESERVE_MASQUER : 0, true)
     if (!ligne) return next(e)
     const autres = await next(e)
-    const { Box, Button } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const numero = inst.run.numero
     return (
       <Box flexDirection="column">
         <Box key="orchestre" flexDirection="row">
           {dessiner($, e, ligne, 'bandeau')}
+          {fini && <Text> </Text>}
           {fini && <Button key="masquer" label="Masquer" hotkey="0" plain onPress={() => { masqueChoisi = numero; return update($, masque, () => numero) }} />}
         </Box>
         {autres}
@@ -194,7 +203,6 @@ export const register: Register = on => {
   // Le spinner : la tâche et l'étape en cours, et le nombre de tâches qui tournent
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const inst = await read($, instantane)
-    await read($, tic)
     const s = inst ? suffixe(inst, await $.clock.now()) : null
     return s ? next({ ...e, props: { ...e.props, suffix: s } }) : next(e)
   })
@@ -204,16 +212,17 @@ export const register: Register = on => {
     const inst = await read($, instantane)
     if (!inst) return <Text dimColor>Aucun suivi.json lu pour l'instant.</Text>
     const actif: Onglet = await read($, onglet)
-    await read($, tic)
     const maintenant = await $.clock.now()
     const colonnes = e.props.bodyColumns
     const lignes: Ligne[] =
       actif === 'relire' ? lignesRelire(inst, maintenant, colonnes)
       : actif === 'journal' ? lignesJournal(inst, maintenant, colonnes)
       : actif === 'bilan' ? lignesBilan(inst, maintenant)
-      : lignesTaches(inst, maintenant, colonnes)
-    const ongletBouton = (id: Onglet, libelle: string, touche: string) => (
-      <Button key={`onglet-${id}`} label={id === actif ? `[${libelle}]` : libelle} hotkey={touche} plain variant={id === actif ? 'primary' : 'secondary'} onPress={() => update($, onglet, () => id)} />
+      : lignesTaches(inst, maintenant, colonnes, true)
+    // L'onglet ouvert est une pastille ; les autres, des boutons avec leur touche
+    const ongletBouton = (id: Onglet, libelle: string, touche: string) => (id === actif
+      ? <Text key={`onglet-${id}`} color="inverseText" backgroundColor="claude" bold>{` ${libelle} `}</Text>
+      : <Button key={`onglet-${id}`} label={libelle} hotkey={touche} plain onPress={() => update($, onglet, () => id)} />
     )
     return (
       <Box flexDirection="column">
@@ -252,7 +261,7 @@ function dessiner($: EngineInterface, e: Parameters<EngineInterface['ui']['resol
   return (
     <Box key={cle} flexDirection="row">
       {ligne.map((m, i) => (
-        <Text key={`${cle}-${i}`} color={m.c} bold={m.b} dimColor={m.d} wrap="truncate">{m.t}</Text>
+        <Text key={`${cle}-${i}`} color={m.c} backgroundColor={m.f} bold={m.b} dimColor={m.d} wrap="truncate">{m.t}</Text>
       ))}
     </Box>
   )

@@ -57,8 +57,9 @@ export type Instantane = {
   journal: { quand: number | null; genre: string; tache: string | null; texte: string }[]
 }
 
-// Un morceau de ligne : texte, couleur du thème (success, error, warning, suggestion, subtle, claude, merged), gras, estompé
-export type Morceau = { t: string; c?: string; b?: boolean; d?: boolean }
+// Un morceau de ligne : texte, couleur du thème (success, error, warning, suggestion, subtle, claude, merged, planMode,
+// inverseText), gras, estompé, fond (une couleur du thème : pastilles « ⚠ à toi », « fusionnée »)
+export type Morceau = { t: string; c?: string; b?: boolean; d?: boolean; f?: string }
 export type Ligne = Morceau[]
 
 export type Onglet = 'taches' | 'relire' | 'journal' | 'bilan'
@@ -77,8 +78,6 @@ declare module 'claude-code' {
       masque: number | null
       // Format inconnu déjà signalé, pour ne le dire qu'une fois
       alerte: string | null
-      // Heure du dernier redessin forcé pendant un run : les durées avancent sans nouvelle écriture de suivi.json
-      tic: number
     }
   }
 }

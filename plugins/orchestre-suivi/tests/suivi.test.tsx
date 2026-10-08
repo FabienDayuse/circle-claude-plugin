@@ -41,28 +41,39 @@ function monde(on: On, commande: 'ok' | 'pris' = 'ok') {
   return { fichier, toasts, ouverts, remplis }
 }
 
+// La tête du bandeau pendant un run : une roue qui tourne
+const ROUE = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] $/
+
 const BAND = { component: 'AbovePrompt' as const, props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 9 }, view: {} } }
 
-test('bandeau, /suivi et notifications pendant un run, sur le terminal et le bureau', async ($, on) => {
+// Une minute d'animation à 150 ms : quelques secondes de dessins sous le kit
+test('bandeau, /suivi et notifications pendant un run, sur le terminal et le bureau', { timeoutMs: 20000 }, async ($, on) => {
   const horloge = mock.clock(on, { now: T0 })
   const w = monde(on)
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface, ...BAND })
-    expect(await ui.find({ text: /▶ / })).toBeDefined()
+    expect(await ui.find({ text: ROUE })).toBeDefined()
     expect(await ui.find({ text: /0\/3/ })).toBeDefined()
-    expect(await ui.find({ text: /◐ 1 en cours/ })).toBeDefined()
+    expect(await ui.find({ text: /◐ T01 / })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: 'réalisation' }))?.props.color).toBe('suggestion')
+    expect((await ui.find({ type: 'Text', text: /^█+$/ }))?.props.color).toBe('suggestion')
     expect(await ui.find({ text: /⏱ 30 min/ })).toBeDefined()
     expect(await ui.find({ text: /bandeau d'un autre mod/ })).toBeDefined()
     await ui.unmount()
   }
-  // Dix minutes sans écriture de suivi.json : le bandeau déjà affiché se redessine (toutes les 30 s), la durée avance
+  // Sans écriture de suivi.json, le bandeau déjà affiché se redessine à chaque image : la roue tourne, la durée avance
   const affiche = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
-  await horloge.advance(10 * 60000)
-  expect(await affiche.find({ text: /⏱ (39|40) min/ })).toBeDefined()
+  // La roue tourne d'une image à l'autre, sans écriture de suivi.json
+  const image = async () => String((await affiche.find({ text: ROUE }))?.children?.[0] ?? '')
+  const avant = await image()
+  await horloge.advance(150)
+  expect(await image()).not.toBe(avant)
+  await horloge.advance(60000)
+  expect(await affiche.find({ text: /⏱ 31 min/ })).toBeDefined()
   await affiche.unmount()
   const texte = await $.command.run({ command: 'suivi', args: 'texte', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as never)
-  expect(texte.text ?? '').toMatch(/^▶ demo {2}phase 1\/2/)
+  expect(texte.text ?? '').toMatch(/^▶ demo {2}◉○/)
   // T01 fusionnée, T02 attend un humain : deux notifications à la lecture suivante
   w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'] }), tache('T03', 2)])
   w.fichier.mtime = 2
@@ -81,7 +92,11 @@ test('panneau /suivi : onglets, bilan et brouillon de PR dans le prompt', async 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface, component: 'Pane', requestId: 'orchestre-suivi', props: { title: 'Orchestre', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } })
     expect(await ui.find({ text: /Phase 1/ })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /^■+$/ }))?.props.color).toBe('success')
+    // L'onglet ouvert est une pastille, les autres des boutons
+    expect((await ui.find({ type: 'Text', text: ' Tâches ' }))?.props.backgroundColor).toBe('claude')
     await ui.press({ key: 'onglet-relire' })
+    expect((await ui.find({ type: 'Text', text: /^ À relire/ }))?.props.backgroundColor).toBe('claude')
     expect(await ui.find({ text: /\.env\.example : ajouter MR_MAX/ })).toBeDefined()
     await ui.press({ key: 'onglet-bilan' })
     expect(await ui.find({ text: /1 décision prise d'office/ })).toBeDefined()
@@ -150,6 +165,8 @@ test('fin de run : « Masquer » sur la touche 0, place du bouton gardée, masqu
   const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: pleine + 5 } })
   expect(await ui.find({ text: /■ / })).toBeDefined()
   expect(await ui.find({ text: /\/suivi pour le détail/ })).toBeUndefined()
+  // Ce qui demande quelqu'un, en pastille sur fond ambre
+  expect((await ui.find({ type: 'Text', text: /⚠ 1 à toi/ }))?.props.backgroundColor).toBe('warning')
   const bouton = await ui.find({ key: 'masquer' })
   expect(bouton?.props.hotkey).toBe('0')
   await ui.press({ key: 'masquer' })
@@ -171,7 +188,7 @@ test('/suivi déjà pris par un autre plugin : le suivi démarre quand même et 
   const w = monde(on, 'pris')
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
-  expect(await ui.find({ text: /▶ / })).toBeDefined()
+  expect(await ui.find({ text: ROUE })).toBeDefined()
   await ui.unmount()
   expect(w.toasts.some(t => t.startsWith("orchestre-suivi : /suivi n'a pas pu être ajoutée"))).toBe(true)
 })
@@ -197,7 +214,20 @@ test('après /clear : le plan choisi par /suivi plans/<nom> revient, et suivi.js
   memoire.effacer()
   await $.classic.SessionStart({ source: 'clear' } as never)
   const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
-  expect(await ui.find({ text: /▶ / })).toBeDefined()
+  expect(await ui.find({ text: ROUE })).toBeDefined()
   expect(await ui.find({ text: /^autre$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('run resté « en-cours » sans nouvelles : plus d\'animation, mais son âge avance toutes les 30 s', async ($, on) => {
+  const horloge = mock.clock(on, { now: T0 })
+  const w = monde(on)
+  w.fichier.texte = doc([tache('T01', 1, { etape: 'worker', isole: true, debut: '2026-10-08T11:05:00+02:00' })], { maj: '2026-10-08T11:10:00+02:00' })
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await ui.find({ text: /^◌ $/ })).toBeDefined()
+  expect(await ui.find({ text: /sans nouvelles depuis 50 min/ })).toBeDefined()
+  await horloge.advance(61000)
+  expect(await ui.find({ text: /sans nouvelles depuis 51 min/ })).toBeDefined()
   await ui.unmount()
 })

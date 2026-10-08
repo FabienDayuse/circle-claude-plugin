@@ -1,7 +1,8 @@
 // Démo du mod orchestre-suivi : un dépôt jouet, puis deux runs joués pas à pas par le vrai scripts/suivi.mjs, sans agent
 // ni modèle. On regarde pendant ce temps une session Claude Code ouverte dans le dépôt, avec le mod chargé.
-// Après chaque pas, la démo affiche ce que le mod doit montrer, calculé par son propre modèle (hooks/modele.mjs) :
-// ce qui diffère dans Claude Code vient du dessin ou du chargement du mod, pas des données.
+// Après chaque pas, la démo affiche ce que le mod doit montrer, calculé par son propre modèle (hooks/modele.mjs), en
+// texte : dans Claude Code, le même bandeau est en couleurs et s'anime. Ce qui diffère dans la session vient du dessin
+// ou du chargement du mod, pas des données.
 // Usage : node tests/demo-suivi.mjs <dossier-à-créer> [--pas <ms>]      (4000 ms entre deux pas par défaut)
 // Dans un terminal, la démo attend Entrée avant chaque run ; sans terminal (tests), elle enchaîne.
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
@@ -129,6 +130,8 @@ Ouvre une session Claude Code dans ce dossier, avec le mod :
 Accepte l'invite de confiance du dossier : sans elle, aucun mod ne se charge.
 Vérifie avec /plugin qu'il est chargé : la ligne sous les onglets doit nommer orchestre-suivi.
 Le mod relit suivi.json toutes les 2 s : chaque pas ci-dessous doit apparaître dans la session en 2 s au plus.
+Ci-dessous, le texte attendu ; dans la session, le bandeau est en couleurs (une case par tâche, verte quand elle est
+fusionnée, bleue quand elle est en cours, ambre quand elle attend quelqu'un) et s'anime pendant le run.
 Le suffixe du spinner ne se voit que pendant que Claude travaille : pendant un run, demande-lui par exemple
 « lance sleep 60 dans Bash ».
 

@@ -5,7 +5,7 @@ Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plu
 | Plugin | Version | Rôle |
 | :- | :- | :- |
 | `orchestre` | 0.8.1 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
-| `orchestre-suivi` | 0.1.0 | Mod de suivi d'un run `orchestre` dans la session pilote, en lecture seule sur `plans/<nom>/suivi.json` : bandeau au-dessus du prompt pendant un run, suffixe du spinner, `/suivi` (panneau Tâches, À relire, Journal, Bilan, ou `/suivi texte`), notifications, brouillon de PR dans le prompt. Facultatif : `orchestre` ne dépend pas de lui. |
+| `orchestre-suivi` | 0.1.0 | Mod de suivi d'un run `orchestre` dans la session pilote, en lecture seule sur `plans/<nom>/suivi.json` : bandeau en couleurs et animé au-dessus du prompt pendant un run (une case par tâche colorée par statut, phases en points, étape en cours, dernière nouvelle), suffixe du spinner, `/suivi` (panneau Tâches, À relire, Journal, Bilan, ou `/suivi texte`), notifications, brouillon de PR dans le prompt. Facultatif : `orchestre` ne dépend pas de lui. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
@@ -128,7 +128,7 @@ Une démo joue deux runs d'un plan de 5 tâches avec le vrai `suivi.mjs`, sans a
 node tests/demo-suivi.mjs ~/tmp/orchestre-demo
 ```
 
-Elle indique la session à ouvrir dans le dépôt créé (`claude --plugin-dir <clone>/plugins/orchestre-suivi`, ou `claude` si le mod est installé), puis attend Entrée avant chaque run. Un pas toutes les 4 s (`--pas <ms>` pour changer). Ce qui diffère dans la session vient du chargement ou du dessin du mod, pas des données.
+Elle indique la session à ouvrir dans le dépôt créé (`claude --plugin-dir <clone>/plugins/orchestre-suivi`, ou `claude` si le mod est installé), puis attend Entrée avant chaque run. Son journal donne le texte attendu ; c'est dans la session que le bandeau est en couleurs et s'anime. Un pas toutes les 4 s (`--pas <ms>` pour changer). Ce qui diffère dans la session vient du chargement ou du dessin du mod, pas des données.
 
 Si le mod ne montre rien ([dépannage des mods](https://code.claude.com/docs/en/plugins/mods/troubleshoot)) :
 
@@ -223,7 +223,7 @@ tests/
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 14 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont la démo jouée sans pause. Les 7 tests du mod sous le moteur passent par `npm run validate`.
+- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 17 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont la démo jouée sans pause. Les 8 tests du mod sous le moteur passent par `npm run validate`.
 - Validation : `npm run validate` (`claude plugin validate` sur les deux plugins et sur la marketplace, puis `claude plugin test` du mod).
 - Essayer le mod sans l'installer : `claude --plugin-dir plugins/orchestre-suivi` dans le dépôt d'un plan qui a un `suivi.json`, par exemple celui de `tests/demo-suivi.mjs`.
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.

@@ -48,13 +48,14 @@ try {
 
   cas('pendant un run : bandeau, suffixe du spinner, tâches en cours dans l\'onglet Tâches', () => {
     const b = M.brut(M.bandeau(A, tA, 140))
-    assert.match(b, /^▶ demo {2}phase 1\/2 {2}▕░+▏ 0\/4 {2}◐ 2 en cours {2}⏱ 1 min {3}\/suivi pour le détail$/)
-    assert.match(M.brut(M.bandeau(A, tA, 80)), /◐ 2 en cours {2}⏱ 1 min$/, 'sans l\'aide, les libellés tiennent en 80')
-    assert.match(M.brut(M.bandeau(A, tA, 50)), /◐ 2 {2}⏱/, 'libellés courts')
+    assert.match(b, /^▶ demo {2}◉○ {2}█+░+ {2}0\/4 {2}◐ T01 réalisation \+1 {2}⏱ 1 min {3}\/suivi pour le détail$/)
+    assert.match(M.brut(M.bandeau(A, tA, 80)), /◐ T01 réalisation \+1 {2}⏱ 1 min$/, 'sans l\'aide, l\'étape tient en 80')
+    assert.match(M.brut(M.bandeau(A, tA, 50)), /◐ 2 en cours {2}⏱/, 'sans l\'étape')
+    assert.match(M.brut(M.bandeau(A, tA, 44)), /◐ 2 {2}⏱/, 'libellés courts')
     assert.equal(M.suffixe(A, tA), ' · T01 réalisation · 2 tâches en cours…')
     const t = texte(M.lignesTaches(A, tA, 100))
-    assert.match(t, /^◐ Phase 1 {2}0\/2/m); assert.match(t, /◐ T01 +Tâche T01 +réalisation \(worktree\)/); assert.match(t, /◐ T02 .*vérification/)
-    assert.match(t, /^○ Phase 2 {2}0\/2/m); assert.doesNotMatch(t, /T03/, 'phase suivante repliée')
+    assert.match(t, /^◉ Phase 1 +■■ {2}0\/2/m); assert.match(t, /◐ T01 +Tâche T01 +réalisation \(worktree\)/); assert.match(t, /◐ T02 .*vérification/)
+    assert.match(t, /^○ Phase 2 +■■ {2}0\/2/m); assert.doesNotMatch(t, /T03/, 'phase suivante repliée')
   })
 
   suivi('cloture', { tache: 'T01', statut: 'fusionnée', essais: 2, branche: 'tache/T01', refus: [{ essai: 1, par: 'évaluation', manques: ['texte faux'] }], relectures: ['agents/x/.env.example : ajouter MR_MAX'], decisions_office: [{ titre: 'Seuil de relance', option: 'A', description: 'plafond à 30 s' }] })
@@ -71,11 +72,11 @@ try {
     const r = texte(M.lignesRelire(B, tA, 100))
     assert.match(r, /À relire avant la PR : 3\./); assert.match(r, /⚑ T01 {2}Tâche T01 · phase 1 · il y a/); assert.match(r, /agents\/x\/\.env\.example : ajouter MR_MAX/)
     const bi = texte(M.lignesBilan(B, tA))
-    assert.match(bi, /demo : 1\/4 tâches fusionnées/); assert.match(bi, /^ +1 +1\/2 .* 3 +T01 ×2$/m)
+    assert.match(bi, /demo : 1\/4 tâches fusionnées/); assert.match(bi, /^ +1 +1\/2 .* 3 +■+ +T01 ×2$/m)
     assert.match(bi, /⚑ 3 relectures avant la PR {3}T01, T02/); assert.match(bi, /⇒ 1 décision prise d'office {3}T01/); assert.match(bi, /⚠ T02 attend un humain : secret manquant/)
     const pr = M.textePR(B, tA)
     assert.match(pr, /- T01 : agents\/x\/\.env\.example : ajouter MR_MAX/); assert.match(pr, /- T01, Seuil de relance : option A, plafond à 30 s/); assert.match(pr, /Encore en attente : T02 \(attend un humain\)/)
-    assert.match(M.texteEtat(B, tA), /^▶ demo {2}phase 1\/2/)
+    assert.match(M.texteEtat(B, tA), /^▶ demo {2}◉○/)
     assert.match(texte(M.lignesJournal(B, tA, 100)), /⚑ /)
   })
 
@@ -85,7 +86,7 @@ try {
   cas('fin de run : notification, bandeau de fin, plus de suffixe ni de tâche en cours', () => {
     assert.deepEqual(B.points.map(p => p.role), ['a-trancher'], 'le scribe note le point à la clôture')
     assert.deepEqual(M.changements(B, C), ['Run 1 (phase 1) : arbitrage', 'Run arrêté : T02, Secret manquant'], 'point devenu point d\'arrêt')
-    assert.match(M.brut(M.bandeau(C, tA, 140)), /^■ demo {2}phase 1\/2 .* 1\/4 {2}⚑ 3 à relire {2}⚠ 1 à toi {2}run 1 arbitrage {2}⏱ /)
+    assert.match(M.brut(M.bandeau(C, tA, 140)), /^■ demo {2}◉○ {2}\S+ {2}1\/4 {2}⚑ 3 à relire {3}⚠ 1 à toi {3}run 1 arbitrage {2}⏱ /)
     assert.equal(M.suffixe(C, tA), null); assert.deepEqual(M.enCours(C, tA), [])
     assert.match(texte(M.lignesBilan(C, tA)), /\? T02 : Secret manquant \(humain\)/)
   })
@@ -96,7 +97,7 @@ try {
     const G = M.normaliser(doc)
     const l = M.lignesTaches(G, tA, 100)
     assert.equal(l.filter(x => /Phase/.test(M.brut(x))).length, 10)
-    assert.ok(l.length <= 10 + 6 + 1 + 2, `${l.length} lignes`)
+    assert.ok(l.length <= 10 + 6 + 1 + 2 + 5, `${l.length} lignes`)
     assert.match(texte(l), /○ 1 autres à faire|○ \d+ autres à faire/)
     assert.equal(M.resumer(G, tA).courante.numero, 4)
   })
@@ -104,7 +105,7 @@ try {
   cas('run interrompu (resté « en-cours » sans écriture depuis 45 min) : sans nouvelles, plus d\'étape ni de suffixe', () => {
     const tard = (A.maj ?? 0) + M.SILENCE_MS + 60000
     assert.ok(M.silencieux(A, tard)); assert.ok(!M.silencieux(A, tA))
-    assert.match(M.brut(M.bandeau(A, tard, 140)), /^◌ demo {2}phase 1\/2 .* 0\/4 {2}sans nouvelles depuis 46 min {2}⏱ /)
+    assert.match(M.brut(M.bandeau(A, tard, 140)), /^◌ demo {2}◉○ {2}░+ {2}0\/4 {2}sans nouvelles depuis 46 min {2}⏱ /)
     assert.doesNotMatch(M.brut(M.bandeau(A, tard, 140)), /en cours/)
     assert.equal(M.suffixe(A, tard), null); assert.deepEqual(M.enCours(A, tard), [])
     assert.doesNotMatch(texte(M.lignesTaches(A, tard, 100)), /◐ T0/)
@@ -115,7 +116,7 @@ try {
     for (const t of doc.taches) if (t.phase === 2) t.statut = 'annulée'
     const X = M.normaliser(doc)
     assert.deepEqual(M.phasesDe(X, tA).map(p => p.numero), [1])
-    assert.match(M.brut(M.bandeau(X, tA, 140)), /phase 1\/1 .* 1\/2/)
+    assert.match(M.brut(M.bandeau(X, tA, 140)), /^■ demo {2}◉ {2}\S+ {2}1\/2 /)
   })
 
   // Run 2 en mode auto : le premier scribe tranche le point de T02, T02 reprend, puis la phase 2
@@ -129,7 +130,7 @@ try {
     assert.equal(M.resumer(C, tA).attention.length, 1, 'avant le run 2, T02 attend un humain')
     assert.deepEqual(M.resumer(E, tE).attention, []); assert.doesNotMatch(M.brut(M.bandeau(E, tE, 140)), /à toi/)
     assert.match(texte(M.lignesTaches(E, tE, 100)), /⚑ T02 .*point tranché, reprise à venir/)
-    assert.deepEqual(M.resumer(F, tE).attention, []); assert.match(M.brut(M.bandeau(F, tE, 140)), /◐ 1 en cours/)
+    assert.deepEqual(M.resumer(F, tE).attention, []); assert.match(M.brut(M.bandeau(F, tE, 140)), /◐ T02 réalisation/)
     assert.match(texte(M.lignesTaches(F, tE, 100)), /◐ T02 +Tâche T02 +réalisation \(worktree\)/)
     assert.equal(M.resumer(F, tE).phases[0].attention, 0)
     // Reprise sans arbitrage dans ce run (tâche bloquée relancée, point réglé ailleurs) : l'étape suffit
@@ -150,9 +151,9 @@ try {
 
   cas('run en mode auto : le bandeau suit la phase atteinte, la fin de run nomme les phases, chaque phase a sa durée', () => {
     assert.equal(G2.run.phase, 1, 'run.phase reste la phase de départ')
-    assert.match(M.brut(M.bandeau(G2, tE, 140)), /^▶ demo {2}phase 2\/2 /)
+    assert.match(M.brut(M.bandeau(G2, tE, 140)), /^▶ demo {2}●◉ /)
     assert.equal(M.phaseDuRun(E), 1, 'avant toute étape, la phase de départ')
-    assert.match(M.brut(M.bandeau(H, tE, 140)), /^✓ demo {2}phase 2\/2 .* 4\/4 /)
+    assert.match(M.brut(M.bandeau(H, tE, 140)), /^✓ demo {2}●● {2}\S+ {2}4\/4 /)
     assert.ok(M.changements(G2, H).includes('Run 2 (phases 1 à 2) : terminé'), M.changements(G2, H).join(' | '))
     assert.ok(M.changements(B, C).includes('Run 1 (phase 1) : arbitrage'), 'un run d\'une phase garde « phase 1 »')
     assert.notEqual(M.phasesDe(H, tE)[1].duree, null, 'la phase 2 a une durée, bien que run.phase vaille 1')
@@ -165,14 +166,68 @@ try {
         const l = M.bandeau(X, t, w, reserve)
         // Sur ce petit plan, la forme la plus courte tient en 50 cellules ; en deçà, l'affichage coupe la fin
         if (w - reserve >= 50) assert.ok(M.largeur(l) <= w - reserve, `${w} - ${reserve} : ${M.largeur(l)} « ${M.brut(l)} »`)
-        assert.match(M.brut(l), /^[▶■✓◌] demo {2}phase \d\/\d /, 'nom et phase toujours là')
+        assert.match(M.brut(l), /^[▶■✓◌] demo {2}[●◉○]+ /, 'nom et phases toujours là')
         assert.match(M.brut(l), /\d\/\d+/, 'avancement toujours là')
       }
     }
-    assert.match(M.brut(M.bandeau(C, tA, 160, 12)), /⚠ 1 à toi {2}run 1 arbitrage {2}⏱ .*\/suivi pour le détail$/)
-    assert.match(M.brut(M.bandeau(C, tA, 62, 12)), /⚠ 1 {2}(run 1 )?arbitrage$/, 'en 50 cellules : ce qui attend et le statut du run, sans la durée')
-    const serre = M.bandeau(C, tA, 56, 12)
-    assert.ok(M.largeur(serre) <= 44, M.brut(serre)); assert.match(M.brut(serre), /⚠ 1 {2}arbitrage$/, 'en 44 : le statut sans le numéro du run')
+    assert.match(M.brut(M.bandeau(C, tA, 160, 12)), /⚠ 1 à toi {3}run 1 arbitrage {2}⏱ .*\/suivi pour le détail$/)
+    assert.match(M.brut(M.bandeau(C, tA, 62, 12)), /⚠ 1 {3}(run 1 )?arbitrage$/, 'en 50 cellules : ce qui attend et le statut du run, sans la durée')
+    const serre = M.bandeau(C, tA, 50, 12)
+    assert.ok(M.largeur(serre) <= 38, M.brut(serre)); assert.match(M.brut(serre), /⚠ 1 {3}arbitrage$/, 'en 38 : le statut sans le numéro du run')
+  })
+
+  cas('couleurs : barre par statut, une case par tâche, points de phase, pastilles', () => {
+    const classes = M.bandeau(C, tA, 140).filter(m => /^[█░▓]+$/.test(m.t))
+    assert.deepEqual(classes.map(m => [m.c, [...m.t].length]), [['success', 3], ['warning', 3], ['subtle', 6]], 'T01 fusionnée, T02 attend un humain, T03 et T04 à faire')
+    const toi = M.bandeau(C, tA, 140).find(m => /à toi/.test(m.t))
+    assert.deepEqual([toi?.c, toi?.f, toi?.b], ['inverseText', 'warning', true], 'pastille sur fond ambre')
+    // Gros plan : en proportion, chaque statut présent garde au moins une case
+    const doc = JSON.parse(readFileSync(join(d, 'suivi.json'), 'utf8'))
+    doc.taches = Array.from({ length: 124 }, (_, i) => ({ ...doc.taches[0], id: `T${i + 1}`, phase: Math.floor(i / 12) + 1, statut: i < 60 ? 'fusionnée' : i === 60 ? 'échec' : 'à-faire', etape: null }))
+    const G = M.normaliser(doc)
+    const barre = M.barreClasses(G.taches, t => (t.statut === 'fusionnée' ? 0 : t.statut === 'échec' ? 3 : 4), 14, tA, false)
+    assert.equal(M.largeur(barre), 14); assert.deepEqual(barre.map(m => m.c), ['success', 'error', 'subtle'])
+    assert.equal(M.pointsPhases(M.phasesDe(G, tA), 1), null, '11 phases : pas de points')
+    assert.match(M.brut(M.bandeau(G, tA, 140)), /^[■✓] demo {2}phase \d+\/11 /)
+    const ph = M.lignesTaches(B, tA, 100).find(l => /Phase 1/.test(M.brut(l)))
+    assert.deepEqual(ph.filter(m => /■/.test(m.t)).map(m => [m.c, m.t]), [['success', '■'], ['warning', '■']])
+    assert.ok(M.lignesTaches(A, tA, 100).flat().some(m => m.t === 'réalisation' && m.c === 'suggestion' && m.b), 'étape dans sa couleur')
+  })
+
+  cas('nouvelle au bout du bandeau : la plus importante de la dernière écriture, vive 5 s, estompée jusqu\'à 10 s', () => {
+    const q = Math.max(...B.journal.map(j => j.quand))
+    const vive = M.nouvelle(B, q + 1000)
+    assert.equal(vive.texte, 'T02 attend un humain', 'le statut l\'emporte sur la relecture et le point notés en même temps')
+    assert.match(M.brut(M.bandeau(B, q + 1000, 160)), / {3}⚑ T02 attend un humain {3}\/suivi pour le détail$/)
+    assert.ok(M.bandeau(B, q + 1000, 160).some(m => m.t === ' T02 attend un humain' && m.b && m.c === 'warning'))
+    assert.ok(M.bandeau(B, q + 7000, 160).some(m => m.t === ' T02 attend un humain' && m.d), 'estompée après 5 s')
+    assert.equal(M.nouvelle(B, q + 11000), null); assert.doesNotMatch(M.brut(M.bandeau(B, q + 11000, 160)), /T02 attend/)
+    // Dates fixées : la clôture de T02 et la fin du run à la même seconde, puis à 3 s d'écart
+    const qC = Math.max(...C.journal.map(j => j.quand))
+    const C1 = { ...C, journal: C.journal.map(j => ({ ...j, quand: qC })) }
+    assert.equal(M.nouvelle(C1, qC).texte, 'T02 attend un humain', 'même seconde que la clôture : le statut l\'emporte')
+    const C2 = { ...C, journal: C.journal.map((j, i) => ({ ...j, quand: i === C.journal.length - 1 ? qC + 3000 : qC })) }
+    assert.deepEqual([M.nouvelle(C2, qC + 3000).texte, M.nouvelle(C2, qC + 3000).marque.t, M.nouvelle(C2, qC + 3000).marque.c], ['run 1 : arbitrage', '■', 'warning'])
+    const qH = Math.max(...H.journal.map(j => j.quand))
+    assert.deepEqual([M.nouvelle(H, qH).marque.t, M.nouvelle(H, qH).marque.c], ['✓', 'success'], 'fin de run terminée en vert')
+    const fin = M.lignesTaches(B, q + 1000, 100).slice(-4).map(M.brut).join('\n')
+    assert.match(fin, /^Dernières nouvelles\n.*\n.*\n.*T02 : point « Secret manquant »/, 'les trois dernières entrées du journal, dans l\'onglet Tâches')
+  })
+
+  cas('animation : la tête tourne, les tâches en cours pulsent et tournent ; rien ne bouge sans anime ni hors d\'un run', () => {
+    const tete = t => M.bandeau(A, t, 140, 0, true)[0].t
+    assert.notEqual(tete(tA), tete(tA + 100)); assert.match(tete(tA), /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] $/)
+    assert.equal(M.bandeau(A, tA, 140)[0].t, '▶ ', 'sans anime, ▶')
+    assert.equal(M.bandeau(C, tA, 140, 0, true)[0].t, '■ ', 'run fini : pas de spinner')
+    const enCours = t => M.bandeau(A, t, 140, 0, true).find(m => m.c === 'suggestion' && /^[█▓]+$/.test(m.t)).t[0]
+    assert.deepEqual(new Set([0, 450, 900, 1350].map(k => enCours(tA + k))), new Set(['█', '▓']), 'les tâches en cours pulsent')
+    const g = t => M.lignesTaches(A, t, 100, true).find(l => /T01/.test(M.brut(l)) && !/Phase/.test(M.brut(l)))[1].t
+    assert.notEqual(g(tA), g(tA + M.IMAGE_MS)); assert.match(g(tA), /^[◐◓◑◒]$/)
+    // Tâche tout juste fusionnée : quelques secondes en vert, avec une pastille
+    const T01 = B.taches.find(t => t.id === 'T01')
+    const ligne = M.lignesTaches(B, T01.fin + 1000, 100).find(l => /T01/.test(M.brut(l)) && /fusionnée/.test(M.brut(l)))
+    assert.ok(ligne && ligne.some(m => m.f === 'success'), 'pastille « fusionnée »')
+    assert.ok(!M.lignesTaches(B, T01.fin + 6000, 100).some(l => / fusionnée $/.test(l.at(-1)?.t ?? '')), 'plus après 5 s')
   })
 
   cas('notifications qui demandent quelqu\'un : affichées plus longtemps', () => {
@@ -191,7 +246,7 @@ try {
     assert.equal(r.status, 0, r.stderr)
     assert.doesNotMatch(r.stdout, /^ 1\. .*\n +bandeau .*\n +notification/m, 'premier suivi.json : rien à notifier')
     for (const attendu of ['notification Run 2 lancé : phase 1, mode auto', 'notification ⚑ T03 attend un humain', 'notification Run arrêté : T03, Clé SMTP de test', 'notification Phase 1 terminée', 'notification Run 2 (phases 1 à 2) : terminé']) assert.ok(r.stdout.includes(attendu), attendu)
-    assert.match(r.stdout, /^17\. .*\n +bandeau +▶ demo {2}phase 2\/2 /m)
+    assert.match(r.stdout, /^17\. .*\n +bandeau +▶ demo {2}●◉ /m)
     const Z = M.normaliser(JSON.parse(readFileSync(join(racine, 'demo', 'plans', 'demo', 'suivi.json'), 'utf8')))
     assert.deepEqual([Z.runs.length, Z.run.statut, Z.taches.filter(t => t.statut === 'fusionnée').length, Z.relectures.length, Z.decisions.length], [2, 'terminé', 5, 3, 1])
     const deja = spawnSync(process.execPath, [resolve('tests/demo-suivi.mjs'), join(racine, 'demo')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })

@@ -191,21 +191,132 @@ const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`
 /** « phase 2 », ou « phases 1 à 3 » pour un run qui en a parcouru plusieurs. @param {number} de @param {number} a */
 const libellePhases = (de, a) => (a > de ? `phases ${de} à ${a}` : `phase ${de}`)
 
-/** Glyphe et couleur d'une tâche. @param {TacheVue} t @param {boolean} active @returns {Morceau} */
-export function glyphe(t, active) {
+// ─── Couleurs et mouvement ───────────────────────────────────────────────────────────────────────────────────────
+// Les images des animations se déduisent de l'heure : rien à garder d'un dessin à l'autre. register.tsx redessine
+// toutes les IMAGE_MS pendant un run actif, et tant qu'un événement a moins de NOUVELLE_MS.
+export const IMAGE_MS = 150
+export const NOUVELLE_MS = 10000
+const ROUE = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏', TOUR = '◐◓◑◒'
+/** @param {number} m */ export const roue = m => /** @type {string} */ (ROUE[Math.floor(m / 100) % ROUE.length])
+/** @param {number} m */ export const tour = m => /** @type {string} */ (TOUR[Math.floor(m / IMAGE_MS) % TOUR.length])
+/** @param {number} m */ const pouls = m => Math.floor(m / 450) % 2 === 1
+// Une couleur par étape, du thème de la personne
+const COULEUR_ETAPE = /** @type {Record<string, string>} */ ({ worker: 'suggestion', vérification: 'merged', évaluation: 'planMode', correction: 'warning', fusion: 'success', replanification: 'subtle', suivi: 'subtle' })
+// Classes d'une tâche, dans l'ordre de la barre : fusionnée, en cours, attend un humain, bloquée ou en échec, le reste
+const CLASSES = /** @type {const} */ ([
+  { c: 'success', g: '█' }, { c: 'suggestion', g: '█' }, { c: 'warning', g: '█' }, { c: 'error', g: '█' }, { c: 'subtle', g: '░' },
+])
+/** @param {Instantane} inst @param {number} maintenant @returns {(t: TacheVue) => number} */
+function classeur(inst, maintenant) {
+  const actif = !!runActif(inst, maintenant), attend = attendQuelquun(inst, maintenant)
+  return t => (fait(t) ? 0 : actif && t.etape ? 1 : attend(t) ? (t.statut === 'besoin-humain' ? 2 : 3) : 4)
+}
+
+/**
+ * Barre empilée par classe de tâche : une ou plusieurs cases par tâche quand elles tiennent, sinon en proportion,
+ * chaque classe présente gardant au moins une case. Les tâches en cours pulsent quand `anime`.
+ * @param {TacheVue[]} ts @param {(t: TacheVue) => number} classe @param {number} cases @param {number} maintenant @param {boolean} anime @returns {Ligne}
+ */
+export function barreClasses(ts, classe, cases, maintenant, anime) {
+  if (!ts.length || cases <= 0) return cases > 0 ? [{ t: '░'.repeat(cases), c: 'subtle' }] : []
+  const n = [0, 0, 0, 0, 0]
+  for (const t of ts) { const i = classe(t); n[i] = (n[i] ?? 0) + 1 }
+  let k
+  if (ts.length <= cases) {
+    const par = Math.floor(cases / ts.length)
+    k = n.map(x => x * par)
+  } else {
+    k = n.map(x => (x ? Math.max(1, Math.floor((x / ts.length) * cases)) : 0))
+    // Ajuste à `cases` : on prend sur la plus grosse classe, ou on lui rend
+    let ecart = cases - k.reduce((a, b) => a + b, 0)
+    while (ecart !== 0) {
+      const i = k.indexOf(Math.max(...k))
+      if (ecart < 0 && /** @type {number} */ (k[i]) <= 1) break
+      k[i] = /** @type {number} */ (k[i]) + Math.sign(ecart)
+      ecart -= Math.sign(ecart)
+    }
+  }
+  /** @type {Ligne} */
+  const l = []
+  k.forEach((x, i) => {
+    if (!x) return
+    const cl = /** @type {typeof CLASSES[number]} */ (CLASSES[i])
+    l.push({ t: (i === 1 && anime && pouls(maintenant) ? '▓' : cl.g).repeat(x), c: cl.c })
+  })
+  return l
+}
+
+/** Une case par tâche (■), colorée par classe, dans l'ordre du plan. @param {TacheVue[]} ts @param {(t: TacheVue) => number} classe @returns {Ligne} */
+function cases(ts, classe) {
+  /** @type {Ligne} */
+  const l = []
+  for (const t of ts) {
+    const c = /** @type {typeof CLASSES[number]} */ (CLASSES[classe(t)]).c
+    const der = l[l.length - 1]
+    if (der && der.c === c) der.t += '■'
+    else l.push({ t: '■', c })
+  }
+  return l
+}
+
+/** Les phases en points : ● faite, ◉ celle du run, ○ ambre une qui attend, ○ à venir ; null au-delà de 10 phases. @param {PhaseVue[]} phases @param {number | null} courante @returns {Ligne | null} */
+export function pointsPhases(phases, courante) {
+  if (!phases.length || phases.length > 10) return null
+  return phases.map(p => (p.total && p.faites === p.total ? { t: '●', c: 'success' } : p.numero === courante ? { t: '◉', c: 'claude', b: true } : p.attention ? { t: '○', c: 'warning', b: true } : { t: '○', c: 'subtle' }))
+}
+
+const GENRES = /** @type {Record<string, Morceau>} */ ({
+  run: { t: '▶', c: 'claude' }, tache: { t: '▶', c: 'suggestion' }, etape: { t: '·', d: true }, refus: { t: '↻', c: 'merged' },
+  statut: { t: '●', c: 'success' }, ajout: { t: '+', c: 'suggestion' }, amendement: { t: '~', c: 'merged' }, relecture: { t: '⚑', c: 'warning' },
+  'decision-office': { t: '⇒', c: 'warning' }, point: { t: '?', c: 'warning' }, arbitrage: { t: '✓', c: 'success' }, pilote: { t: '✎', c: 'suggestion' }, erreur: { t: '✗', c: 'error' },
+})
+/** Glyphe et couleur d'une entrée du journal, d'après son genre et ce qu'elle dit. @param {{ genre: string, texte: string }} j @returns {Morceau} */
+function marque(j) {
+  if (j.genre === 'statut') return / fusionnée/.test(j.texte) ? { t: '✓', c: 'success' } : / besoin-humain/.test(j.texte) ? { t: '⚑', c: 'warning' } : / (bloquée|échec)/.test(j.texte) ? { t: '✗', c: 'error' } : { t: '●', c: 'subtle' }
+  if (j.genre === 'run') return / : terminé/.test(j.texte) ? { t: '✓', c: 'success' } : / : (arbitrage|partiel|à-relancer)| interrompu/.test(j.texte) ? { t: '■', c: 'warning' } : { t: '▶', c: 'claude' }
+  return GENRES[j.genre] || { t: '·', d: true }
+}
+// Ce qui fait une nouvelle au bout du bandeau, du plus important au moins important ; pas les étapes ni les démarrages,
+// que le bandeau montre déjà. Une écriture de suivi.json en note souvent plusieurs, à la même seconde : la plus
+// importante l'emporte, et la plus récente à importance égale.
+const MARQUANTS = ['statut', 'run', 'erreur', 'arbitrage', 'point', 'refus', 'decision-office', 'relecture', 'pilote', 'ajout']
+/** La nouvelle en peu de mots, d'après le texte que suivi.mjs écrit au journal. @param {{ genre: string, texte: string }} j */
+function enBref(j) {
+  const t = j.texte
+  /** @type {RegExpMatchArray | null} */
+  let m
+  if (j.genre === 'run' && (m = t.match(/^run (\d+) : phase (\d+), mode (\S+?),/))) return `run ${m[1]} lancé (phase ${m[2]}, mode ${m[3]})`
+  if (j.genre === 'statut' && (m = t.match(/^(\S+) : (fusionnée|besoin-humain|bloquée|échec) \((\d+) essai/))) {
+    const [, id, st, n] = m
+    return st === 'fusionnée' ? `${id} fusionnée${Number(n) > 1 ? ` au ${n}e essai` : ''}` : `${id} ${/** @type {Record<string, string>} */ (ATTENTION)[/** @type {string} */ (st)]}`
+  }
+  if (j.genre === 'refus' && (m = t.match(/^(\S+) : essai (\d+) refusé \(([^)]+)\)/))) return `${m[1]} : essai ${m[2]} refusé (${m[3]})`
+  if (j.genre === 'relecture' && (m = t.match(/^(\S+) : relecture/))) return `${m[1]} : à relire avant la PR`
+  if (j.genre === 'decision-office' && (m = t.match(/^(\S+) :/))) return `${m[1]} : décision prise d'office`
+  if (j.genre === 'arbitrage' && (m = t.match(/^(\S+) : .* tranché, option (\S+)/))) return `${m[1]} : point tranché (option ${m[2]})`
+  return t
+}
+/**
+ * La dernière nouvelle de moins de NOUVELLE_MS : une tâche close, un run lancé ou fini, un arbitrage, un refus…
+ * @param {Instantane} inst @param {number} maintenant @returns {{ marque: Morceau, texte: string, age: number, genre: string } | null}
+ */
+export function nouvelle(inst, maintenant) {
+  const recentes = inst.journal.filter(j => j.quand != null && maintenant - j.quand <= NOUVELLE_MS && MARQUANTS.includes(j.genre))
+  if (!recentes.length) return null
+  const quand = Math.max(...recentes.map(j => /** @type {number} */ (j.quand)))
+  const j = recentes.filter(x => x.quand === quand).reverse().sort((x, y) => MARQUANTS.indexOf(x.genre) - MARQUANTS.indexOf(y.genre))[0]
+  if (!j) return null
+  return { marque: marque(j), texte: enBref(j), age: Math.max(0, maintenant - quand), genre: j.genre }
+}
+
+/** Glyphe et couleur d'une tâche ; une tâche en cours tourne quand `anime`. @param {TacheVue} t @param {boolean} active @param {number} [maintenant] @param {boolean} [anime] @returns {Morceau} */
+export function glyphe(t, active, maintenant = 0, anime = false) {
   if (t.statut === 'fusionnée') return { t: '●', c: 'success' }
   if (t.statut === 'annulée') return { t: '–', d: true }
-  if (active && t.etape) return { t: '◐', c: 'suggestion' }
-  if (t.statut === 'besoin-humain') return { t: '⚑', c: 'warning' }
-  if (t.statut === 'bloquée' || t.statut === 'échec') return { t: '✗', c: 'error' }
-  return { t: '○', d: true }
-}
-/** @param {PhaseVue} p @returns {Morceau} */
-function glyphePhase(p) {
-  if (p.total && p.faites === p.total) return { t: '●', c: 'success' }
-  if (p.attention) return { t: '⚠', c: 'warning' }
-  if (p.enCours || p.faites) return { t: '◐', c: 'suggestion' }
-  return { t: '○', d: true }
+  if (active && t.etape) return { t: anime ? tour(maintenant) : '◐', c: 'suggestion', b: true }
+  if (t.statut === 'besoin-humain') return { t: '⚑', c: 'warning', b: true }
+  if (t.statut === 'bloquée' || t.statut === 'échec') return { t: '✗', c: 'error', b: true }
+  return { t: '○', c: 'subtle' }
 }
 const ETAPES = /** @type {Record<string, string>} */ ({ worker: 'réalisation', vérification: 'vérification', évaluation: 'évaluation', correction: 'correction', fusion: 'fusion', replanification: 'replanification', suivi: 'suivi' })
 
@@ -217,57 +328,87 @@ export function quoi(t, active, tranchee = false) {
   if (t.statut === 'fusionnée') return t.essais > 1 ? `${t.essais} essais` : ''
   return t.attend.length ? `attend ${t.attend.slice(0, 4).join(', ')}${t.attend.length > 4 ? '…' : ''}` : ''
 }
+/** La même chose en couleurs : l'étape dans sa couleur, l'essai en ambre, le lieu estompé. @param {TacheVue} t @param {boolean} active @param {boolean} tranchee @param {number} n @returns {Ligne} */
+function quoiColore(t, active, tranchee, n) {
+  if (active && t.etape) {
+    /** @type {Ligne} */
+    const l = [{ t: court(ETAPES[t.etape] || t.etape, n), c: COULEUR_ETAPE[t.etape] || 'subtle', b: true }]
+    if (t.essais > 1) l.push({ t: ` essai ${t.essais}`, c: 'warning' })
+    if (t.isole) l.push({ t: ' (worktree)', d: true })
+    return l
+  }
+  const q = court(quoi(t, active, tranchee), n)
+  if (!q) return []
+  return [{ t: q, c: tranchee ? 'subtle' : t.statut === 'besoin-humain' ? 'warning' : t.statut in ATTENTION ? 'error' : 'subtle' }]
+}
 
 /** Largeur affichée d'une ligne, en cellules (tous ses glyphes en occupent une). @param {Ligne} l */
 export const largeur = l => l.reduce((n, m) => n + [...m.t].length, 0)
 
 /**
  * Le bandeau au-dessus du prompt : une ligne, ou rien (null) quand aucun run n'est à montrer. Il tient dans `colonnes`
- * moins `reserve` (la place d'un bouton à sa suite) : on retire l'aide, puis on raccourcit les libellés et la barre, puis
- * la durée et le numéro du run, jusqu'à ce qu'il tienne. La forme la plus courte fait une quarantaine de cellules sur
- * un petit plan, une soixantaine au plus sur un gros ; en deçà, l'affichage coupe la fin de la ligne.
- * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @param {number} [reserve] @returns {Ligne | null}
+ * moins `reserve` (la place d'un bouton à sa suite) : on retire l'aide, la dernière nouvelle, le détail de l'étape,
+ * puis on raccourcit les libellés et la barre, puis la durée et le numéro du run, jusqu'à ce qu'il tienne. La forme la
+ * plus courte fait une quarantaine de cellules sur un petit plan, une soixantaine au plus sur un gros ; en deçà,
+ * l'affichage coupe la fin de la ligne. Avec `anime`, la tête tourne et les tâches en cours pulsent dans la barre.
+ * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @param {number} [reserve] @param {boolean} [anime] @returns {Ligne | null}
  */
-export function bandeau(inst, maintenant, colonnes, reserve = 0) {
+export function bandeau(inst, maintenant, colonnes, reserve = 0, anime = false) {
   if (!inst.run) return null
   const s = resumer(inst, maintenant)
   const place = Math.max(0, colonnes - reserve)
   /** @type {Ligne | null} */
   let l = null
   for (const forme of FORMES_BANDEAU) {
-    l = ligneBandeau(inst, s, maintenant, forme)
+    l = ligneBandeau(inst, s, maintenant, forme, anime)
     if (largeur(l) <= place) return l
   }
   return l
 }
 // Du plus complet au plus court
 const FORMES_BANDEAU = [
-  { aide: true, libelles: true, barre: 14, nom: 28, duree: true, run: true },
-  { aide: false, libelles: true, barre: 14, nom: 28, duree: true, run: true },
-  { aide: false, libelles: false, barre: 8, nom: 16, duree: true, run: true },
-  { aide: false, libelles: false, barre: 4, nom: 12, duree: false, run: true },
-  { aide: false, libelles: false, barre: 0, nom: 8, duree: false, run: true },
-  { aide: false, libelles: false, barre: 0, nom: 8, duree: false, run: false },
+  { aide: true, nouvelle: true, etape: true, libelles: true, barre: 14, nom: 28, duree: true, run: true },
+  { aide: false, nouvelle: true, etape: true, libelles: true, barre: 14, nom: 28, duree: true, run: true },
+  { aide: false, nouvelle: false, etape: true, libelles: true, barre: 12, nom: 24, duree: true, run: true },
+  { aide: false, nouvelle: false, etape: false, libelles: true, barre: 10, nom: 20, duree: true, run: true },
+  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 8, nom: 16, duree: true, run: true },
+  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 4, nom: 12, duree: false, run: true },
+  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 0, nom: 8, duree: false, run: true },
+  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 0, nom: 8, duree: false, run: false },
 ]
 /**
  * @param {Instantane} inst @param {ReturnType<typeof resumer>} s @param {number} maintenant
- * @param {typeof FORMES_BANDEAU[number]} f @returns {Ligne}
+ * @param {typeof FORMES_BANDEAU[number]} f @param {boolean} anime @returns {Ligne}
  */
-function ligneBandeau(inst, s, maintenant, f) {
+function ligneBandeau(inst, s, maintenant, f, anime) {
   const run = /** @type {NonNullable<Instantane['run']>} */ (inst.run)
   const enCoursRun = !!s.run
-  const tete = s.silence ? { t: '◌ ', c: 'warning' } : enCoursRun ? { t: '▶ ', c: 'claude' } : run.statut === 'terminé' ? { t: '✓ ', c: 'success' } : { t: '■ ', c: 'warning' }
+  const tete = s.silence ? { t: '◌ ', c: 'warning' } : enCoursRun ? { t: `${anime ? roue(maintenant) : '▶'} `, c: 'claude' } : run.statut === 'terminé' ? { t: '✓ ', c: 'success' } : { t: '■ ', c: 'warning' }
+  const phase = phaseDuRun(inst)
   /** @type {Ligne} */
-  const l = [{ ...tete, b: true }, { t: court(inst.plan, f.nom), b: true }]
-  l.push({ t: `  phase ${phaseDuRun(inst)}/${s.phaseMax}`, d: true })
-  if (f.barre) l.push({ t: '  ▕', d: true }, { t: barre(s.faites, s.total, f.barre), c: 'success' }, { t: '▏', d: true }, { t: ` ${s.faites}/${s.total}` })
-  else l.push({ t: `  ${s.faites}/${s.total}` })
-  if (s.enCours.length) l.push({ t: `  ◐ ${s.enCours.length}${f.libelles ? ' en cours' : ''}`, c: 'suggestion' })
+  const l = [{ ...tete, b: true }, { t: court(inst.plan, f.nom), b: true }, { t: '  ' }]
+  const points = pointsPhases(s.phases, phase)
+  if (points) l.push(...points)
+  else l.push({ t: `phase ${phase}/${s.phaseMax}`, d: true })
+  if (f.barre) l.push({ t: '  ' }, ...barreClasses(inst.taches.filter(t => t.statut !== 'annulée'), classeur(inst, maintenant), f.barre, maintenant, anime))
+  l.push({ t: `  ${s.faites}/${s.total}`, b: true })
+  const ec = s.enCours
+  if (ec.length && f.etape) {
+    const t = /** @type {TacheVue} */ (ec[0])
+    l.push({ t: `  ◐ ${t.id} `, c: 'suggestion' }, { t: ETAPES[t.etape || ''] || String(t.etape), c: COULEUR_ETAPE[t.etape || ''] || 'subtle', b: true })
+    if (ec.length > 1) l.push({ t: ` +${ec.length - 1}`, c: 'suggestion' })
+  } else if (ec.length) l.push({ t: `  ◐ ${ec.length}${f.libelles ? ' en cours' : ''}`, c: 'suggestion' })
   if (s.relectures) l.push({ t: `  ⚑ ${s.relectures}${f.libelles ? ' à relire' : ''}`, c: 'warning' })
-  if (s.attention.length) l.push({ t: `  ⚠ ${s.attention.length}${f.libelles ? ' à toi' : ''}`, c: 'warning' })
+  if (s.attention.length) l.push({ t: '  ' }, { t: ` ⚠ ${s.attention.length}${f.libelles ? ' à toi' : ''} `, c: 'inverseText', f: 'warning', b: true })
   if (s.silence) l.push({ t: f.libelles ? `  sans nouvelles depuis ${duree(maintenant - /** @type {number} */ (inst.maj))}` : `  ◌ ${duree(maintenant - /** @type {number} */ (inst.maj))}`, c: 'warning' })
-  else if (!enCoursRun) l.push({ t: f.run ? `  run ${run.numero} ${run.statut}` : `  ${run.statut}`, c: run.statut === 'terminé' ? 'success' : 'warning' })
+  else if (!enCoursRun) l.push({ t: f.run ? `  run ${run.numero} ${run.statut}` : `  ${run.statut}`, c: run.statut === 'terminé' ? 'success' : 'warning', b: true })
   if (f.duree) l.push({ t: `  ⏱ ${duree(s.duree)}`, d: true })
+  const n = f.nouvelle ? nouvelle(inst, maintenant) : null
+  // La fin du run est déjà dite par son statut, juste avant
+  if (n && !(n.genre === 'run' && !enCoursRun)) {
+    const vive = n.age < NOUVELLE_MS / 2
+    l.push({ t: '   ' }, { ...n.marque, b: vive, d: !vive }, { t: ` ${court(n.texte, 44)}`, c: vive ? n.marque.c : undefined, b: vive, d: !vive })
+  }
   if (f.aide) l.push({ t: '   /suivi pour le détail', d: true })
   return l
 }
@@ -280,31 +421,48 @@ export function suffixe(inst, maintenant) {
 }
 
 /**
- * Onglet Tâches : une ligne par phase, le détail des tâches de la phase courante et des tâches qui attendent.
- * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @returns {Ligne[]}
+ * Onglet Tâches : une ligne par phase avec une case par tâche, le détail des tâches de la phase du run et de celles qui
+ * attendent, puis les dernières nouvelles. Une tâche tout juste fusionnée reste quelques secondes, en vert.
+ * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @param {boolean} [anime] @returns {Ligne[]}
  */
-export function lignesTaches(inst, maintenant, colonnes) {
+export function lignesTaches(inst, maintenant, colonnes, anime = false) {
   const s = resumer(inst, maintenant), actif = !!s.run
-  const larg = Math.max(12, Math.min(48, colonnes - 34))
+  const cur = actif ? phaseDuRun(inst) : s.courante?.numero ?? null
+  const classe = classeur(inst, maintenant)
+  const larg = Math.max(12, Math.min(40, colonnes - 40))
+  const vient = /** @param {TacheVue} t */ t => fait(t) && t.fin != null && maintenant - t.fin < NOUVELLE_MS / 2
   /** @type {Ligne[]} */
   const out = []
   for (const p of s.phases) {
-    const courante = s.courante && p.numero === s.courante.numero
-    const l = /** @type {Ligne} */ ([glyphePhase(p), { t: ` Phase ${p.numero}`, b: !!courante }, { t: `  ${p.faites}/${p.total}`.padEnd(9) }, { t: duree(p.duree).padStart(8), d: true }])
+    const finie = p.total > 0 && p.faites === p.total
+    const g = finie ? { t: '●', c: 'success' } : p.attention ? { t: '⚠', c: 'warning' } : p.numero === cur ? { t: '◉', c: 'claude', b: true } : p.faites ? { t: '◐', c: 'suggestion' } : { t: '○', c: 'subtle' }
+    const ts = inst.taches.filter(t => t.phase === p.numero && t.statut !== 'annulée')
+    /** @type {Ligne} */
+    const l = [g, { t: ` Phase ${String(p.numero).padEnd(3)}`, b: p.numero === cur || finie, c: finie ? 'success' : undefined }, { t: ' ' }]
+    l.push(...(ts.length <= 30 ? cases(ts, classe) : barreClasses(ts, classe, 20, maintenant, anime)))
+    l.push({ t: `  ${p.faites}/${p.total}`, c: finie ? 'success' : undefined, b: finie }, { t: `  ${duree(p.duree)}`, d: true })
     if (p.relances.length) l.push({ t: `   ${p.relances.slice(0, 3).map(r => `${r.id} ×${r.essais}`).join(', ')}${p.relances.length > 3 ? '…' : ''}`, c: 'merged' })
     out.push(l)
-    const montrer = courante || p.attention > 0 || p.enCours > 0
-    if (!montrer) continue
-    const ts = inst.taches.filter(t => t.phase === p.numero && t.statut !== 'annulée' && !fait(t))
-    const attend = attendQuelquun(inst, maintenant)
-    const aFaire = ts.filter(t => !(t.statut in ATTENTION) && !(actif && t.etape))
-    for (const t of ts.filter(t => (t.statut in ATTENTION) || (actif && t.etape))) {
-      out.push([{ t: '    ' }, glyphe(t, actif), { t: ` ${colonne(t.id, 6)} ${colonne(t.titre, larg)} ` }, { t: court(quoi(t, actif, arbitree(inst, t)), Math.max(10, colonnes - larg - 14)), c: attend(t) ? 'warning' : 'subtle' }, { t: t.debut != null && actif && t.etape ? `  ${duree(maintenant - t.debut)}` : '', d: true }])
+    if (!(p.numero === cur || p.attention > 0 || p.enCours > 0 || ts.some(vient))) continue
+    for (const t of ts.filter(vient)) out.push([{ t: '    ' }, { t: '●', c: 'success', b: true }, { t: ` ${colonne(t.id, 6)} `, c: 'success', b: true }, { t: `${colonne(t.titre, larg)} `, c: 'success' }, { t: ' fusionnée ', c: 'inverseText', f: 'success', b: true }])
+    const restent = ts.filter(t => !fait(t))
+    const aFaire = restent.filter(t => !(t.statut in ATTENTION) && !(actif && t.etape))
+    for (const t of restent.filter(t => (t.statut in ATTENTION) || (actif && t.etape))) {
+      const enMarche = actif && !!t.etape
+      out.push([{ t: '    ' }, glyphe(t, actif, maintenant, anime), { t: ` ${colonne(t.id, 6)} `, b: enMarche }, { t: `${colonne(t.titre, larg)} `, d: !enMarche }, ...quoiColore(t, actif, arbitree(inst, t), Math.max(10, colonnes - larg - 24)), { t: t.debut != null && enMarche ? `  ${duree(maintenant - t.debut)}` : '', d: true }])
     }
     for (const t of aFaire.slice(0, 6)) out.push([{ t: '    ' }, glyphe(t, actif), { t: ` ${colonne(t.id, 6)} ${colonne(t.titre, larg)} `, d: true }, { t: court(quoi(t, actif), Math.max(10, colonnes - larg - 14)), d: true }])
     if (aFaire.length > 6) out.push([{ t: `    ○ ${aFaire.length - 6} autres à faire`, d: true }])
   }
-  if (!out.length) out.push([{ t: 'Aucune tâche dans suivi.json.', d: true }])
+  if (!out.length) return [[{ t: 'Aucune tâche dans suivi.json.', d: true }]]
+  const derniers = inst.journal.filter(j => j.genre !== 'etape').slice(-3)
+  if (derniers.length) {
+    out.push([], [{ t: 'Dernières nouvelles', d: true }])
+    for (const j of derniers) {
+      const vive = j.quand != null && maintenant - j.quand < 4000
+      out.push([{ t: '  ' }, marque(j), { t: ` ${court(enBref(j), Math.max(20, colonnes - 16))}`, b: vive, d: !vive }, { t: `  ${age(j.quand, maintenant)}`, d: true }])
+    }
+  }
   return out
 }
 
@@ -321,24 +479,23 @@ export function lignesRelire(inst, maintenant, colonnes) {
   return out
 }
 
-const GENRES = /** @type {Record<string, Morceau>} */ ({
-  run: { t: '▶', c: 'claude' }, tache: { t: '▶', c: 'suggestion' }, etape: { t: '·', d: true }, refus: { t: '↻', c: 'merged' },
-  statut: { t: '●', c: 'success' }, ajout: { t: '+', c: 'suggestion' }, amendement: { t: '~', c: 'merged' }, relecture: { t: '⚑', c: 'warning' },
-  'decision-office': { t: '⇒', c: 'warning' }, point: { t: '?', c: 'warning' }, arbitrage: { t: '✓', c: 'success' }, pilote: { t: '✎', c: 'suggestion' }, erreur: { t: '✗', c: 'error' },
-})
 /** Onglet Journal : les derniers événements, les plus récents en bas, avec leur âge. @param {Instantane} inst @param {number} maintenant @param {number} colonnes @returns {Ligne[]} */
 export function lignesJournal(inst, maintenant, colonnes) {
   if (!inst.journal.length) return [[{ t: 'Journal vide.', d: true }]]
-  return inst.journal.map(j => [{ t: `${age(j.quand, maintenant).padStart(7)}  `, d: true }, GENRES[j.genre] || { t: '·', d: true }, { t: ` ${court(j.texte, Math.max(20, colonnes - 12))}` }])
+  return inst.journal.map(j => [{ t: `${age(j.quand, maintenant).padStart(7)}  `, d: true }, marque(j), { t: ` ${court(j.texte, Math.max(20, colonnes - 12))}` }])
 }
 
 /** Onglet Bilan : phases, relectures, décisions d'office, ce qui attend. @param {Instantane} inst @param {number} maintenant @returns {Ligne[]} */
 export function lignesBilan(inst, maintenant) {
   const s = resumer(inst, maintenant)
   /** @type {Ligne[]} */
-  const out = [[{ t: s.termine ? `✓ ${inst.plan} terminé` : `${inst.plan} : ${s.faites}/${s.total} tâches fusionnées`, c: s.termine ? 'success' : undefined, b: true }, { t: `   ${pluriel(inst.runs.length, 'run')}`, d: true }]]
+  const out = [[{ t: s.termine ? `✓ ${inst.plan} terminé` : `${inst.plan} : ${s.faites}/${s.total} tâches fusionnées`, c: s.termine ? 'success' : 'claude', b: true }, { t: `   ${pluriel(inst.runs.length, 'run')}`, d: true }]]
   out.push([{ t: '  Phase  Tâches    Durée  Essais', d: true }])
-  for (const p of s.phases) out.push([{ t: `  ${String(p.numero).padStart(5)}  ${`${p.faites}/${p.total}`.padStart(6)}  ${duree(p.duree).padStart(7)}  ${String(p.essais).padStart(6)}` }, { t: p.relances.length ? `   ${p.relances.slice(0, 4).map(r => `${r.id} ×${r.essais}`).join(', ')}${p.relances.length > 4 ? '…' : ''}` : '', c: 'merged' }])
+  const classe = classeur(inst, maintenant)
+  for (const p of s.phases) {
+    const ts = inst.taches.filter(t => t.phase === p.numero && t.statut !== 'annulée')
+    out.push([{ t: `  ${String(p.numero).padStart(5)}  ` }, { t: `${p.faites}/${p.total}`.padStart(6), c: p.faites === p.total ? 'success' : undefined }, { t: `  ${duree(p.duree).padStart(7)}  ${String(p.essais).padStart(6)}   ` }, ...(ts.length <= 30 ? cases(ts, classe) : barreClasses(ts, classe, 20, maintenant, false)), { t: p.relances.length ? `   ${p.relances.slice(0, 4).map(r => `${r.id} ×${r.essais}`).join(', ')}${p.relances.length > 4 ? '…' : ''}` : '', c: 'merged' }])
+  }
   out.push([])
   out.push([{ t: `⚑ ${pluriel(s.relectures, 'relecture')} avant la PR`, c: s.relectures ? 'warning' : 'subtle' }, { t: s.relectures ? `   ${[...new Set(inst.relectures.map(r => r.tache ?? 'plan source'))].slice(0, 8).join(', ')}` : '', d: true }])
   out.push([{ t: `⇒ ${pluriel(inst.decisions.length, 'décision')} prise${inst.decisions.length > 1 ? 's' : ''} d'office`, c: inst.decisions.length ? 'warning' : 'subtle' }, { t: inst.decisions.length ? `   ${inst.decisions.slice(0, 6).map(d => d.tache).join(', ')}` : '', d: true }])
