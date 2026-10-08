@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// suivi (plugin orchestre 0.8.0) : seul écrivain de plans/<nom>/suivi.json (format orchestre-suivi/1) et de sa vue SUIVI.md.
+// suivi (plugin orchestre 0.8.1) : seul écrivain de plans/<nom>/suivi.json (format orchestre-suivi/1) et de sa vue SUIVI.md.
 // Node 18 ou plus, aucune dépendance. Contrat : 0.8.0/CONTRAT.md ; schéma : SCHEMA ci-dessous, copie de suivi.v1.schema.json.
 //
 // Usage : node <racine du plugin>/scripts/suivi.mjs <commande> [<dossier-plan>] [options]
@@ -234,7 +234,7 @@ function localiser(arg) {
 
 // plan-lint fait foi pour le frontmatter (amendements compris), les statuts (git compris) et les prérequis
 function planLint(ctx) {
-  const r = spawnSync(process.execPath, [LINT, ctx.rel, '--json', '--integration', ctx.integration, ...(ctx.base ? ['--base', ctx.base] : [])], { cwd: ctx.racine, env: ENV, encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [LINT, ctx.rel, '--json', '--integration', ctx.integration, ...(ctx.base ? ['--base', ctx.base] : [])], { cwd: ctx.racine, env: ENV, encoding: 'utf8', maxBuffer: 1 << 26 })
   const L = essai(() => JSON.parse(r.stdout))
   if (L && Array.isArray(L.taches)) return L
   return { ok: false, erreurs: [`plan-lint n'a pas rendu d'état (${String(r.stderr || r.stdout || 'sans message').trim().split('\n')[0]})`], taches: null, prerequis: null }
@@ -294,7 +294,17 @@ function tableau(texte) {
   const sepI = estSep(h + 1) ? h + 1 : -1
   const lignesT = []
   for (let i = h + 1; i <= fin; i++) if (i !== sepI) lignesT.push({ n: i + 1, cells: cellules(net(lignes[i])) })
-  return { lignes, h, fin, entete: cellules(net(lignes[h])), sep: sepI >= 0 ? net(lignes[sepI]) : null, lignesT, crlf: lignes[h].endsWith('\r'), retrait: net(lignes[h]).match(/^\s*/)[0] }
+  // Lignes de tâches écrites après le tableau (sous la légende, par un scribe d'avant la 0.8.0) : plan-lint les lit,
+  // la vue les reprend dans le tableau (0.8.1). Une ligne dont l'ID n'est pas une tâche reste du texte.
+  // Seule compte une ligne qui a au moins les cellules de l'en-tête et un statut connu : une ligne d'un autre tableau
+  // (notes, décisions) reste du texte.
+  const entete = cellules(net(lignes[h])), iId = entete.indexOf('ID'), iSt = entete.indexOf('Statut'), orphelines = []
+  for (let i = fin + 1; i < lignes.length; i++) {
+    if (!net(lignes[i]).trim().startsWith('|')) continue
+    const cells = cellules(net(lignes[i]))
+    if (cells.length >= entete.length && RE_ID.test(cells[iId] || '') && STATUTS.includes(cells[iSt] || '')) orphelines.push({ i, n: i + 1, cells })
+  }
+  return { lignes, h, fin, entete, sep: sepI >= 0 ? net(lignes[sepI]) : null, lignesT, orphelines, crlf: lignes[h].endsWith('\r'), retrait: net(lignes[h]).match(/^\s*/)[0] }
 }
 
 // Sens inverse, pour la reconstruction : les cellules lues par le nom de leur colonne ; un statut hors des 7 est une erreur
@@ -304,21 +314,25 @@ function lireSuivi(texte) {
   const k = tb.entete.map(cleColonne), col = (cells, c) => (k.indexOf(c) >= 0 ? cells[k.indexOf(c)] ?? '' : '')
   const vide = v => !v || v === '—' || v === '-'
   const lignes = [], vus = new Set()
-  for (const { n, cells } of tb.lignesT) {
+  for (const { n, cells, orpheline } of [...tb.lignesT, ...tb.orphelines.map(o => ({ ...o, orpheline: true }))]) {
     const id = col(cells, 'id')
     if (!RE_ID.test(id)) continue
-    if (vus.has(id)) refuser(`SUIVI.md, ligne ${n} : ${id} en double`)
+    if (vus.has(id) && !orpheline) refuser(`SUIVI.md, ligne ${n} : ${id} en double`)
     vus.add(id)
     const statut = col(cells, 'statut')
     if (!STATUTS.includes(statut)) refuser(`SUIVI.md, ligne ${n} : statut inconnu « ${statut} » pour ${id} (${STATUTS.join(', ')})`)
     const tok = col(cells, 'tokens'), i = tok.indexOf(' / '), reels = i >= 0 ? tok.slice(i + 3).trim() : ''
     const phase = Number(col(cells, 'phase')), essais = Number(col(cells, 'essais'))
-    lignes.push({
+    const l = {
       id, titre: col(cells, 'titre') || id, statut, essais: Number.isInteger(essais) && essais >= 0 ? essais : 0,
       branche: vide(col(cells, 'branche')) ? null : col(cells, 'branche'), tokens_reels: vide(reels) ? null : reels,
       phase: Number.isInteger(phase) && phase >= 1 ? phase : undefined, modele: col(cells, 'modele') || undefined,
       lot: vide(col(cells, 'lot')) ? null : col(cells, 'lot'), depend_de: vide(col(cells, 'depend de')) ? [] : col(cells, 'depend de').split(/\s*,\s*/).filter(Boolean),
-    })
+    }
+    // Une ligne sous la légende qui reprend une tâche déjà lue la remplace, à sa place : plan-lint lit aussi la dernière
+    const j = lignes.findIndex(x => x.id === id)
+    if (j >= 0) lignes[j] = l
+    else lignes.push(l)
   }
   return lignes
 }
@@ -345,7 +359,7 @@ export function vue(doc, texte) {
   const entete = tb ? tb.entete : Object.values(COLONNES)
   const cles = entete.map(cleColonne)
   const anciens = new Map()
-  if (tb) { const iId = cles.indexOf('id'); for (const l of tb.lignesT) if (RE_ID.test(l.cells[iId] || '')) anciens.set(l.cells[iId], l.cells) }
+  if (tb) { const iId = cles.indexOf('id'); for (const l of [...tb.orphelines, ...tb.lignesT]) if (RE_ID.test(l.cells[iId] || '')) anciens.set(l.cells[iId], l.cells) }
   // Une colonne inconnue garde la cellule actuelle de la tâche, retrouvée par son ID
   const corps = doc.taches.map(t => cles.map((k, j) => echapper(k ? cellule(t, k) : (anciens.get(t.id) || [])[j] ?? '')))
   const tete = entete.map(echapper)
@@ -360,7 +374,11 @@ export function vue(doc, texte) {
     retrait + (espace ? '| ' + larg.map((w, j) => tiret(j, w)).join(' | ') + ' |' : '|' + larg.map((w, j) => tiret(j, w + 2)).join('|') + '|') + fin,
     ...corps.map(r => retrait + '| ' + r.map(remplir).join(' | ') + ' |' + fin),
   ]
-  if (tb) return [...tb.lignes.slice(0, tb.h), ...lignes, ...tb.lignes.slice(tb.fin + 1)].join('\n')
+  if (tb) {
+    const iId = cles.indexOf('id'), dansDoc = new Set(doc.taches.map(t => t.id))
+    const reprises = new Set(tb.orphelines.filter(l => dansDoc.has(l.cells[iId])).map(l => l.i))
+    return [...tb.lignes.slice(0, tb.h), ...lignes, ...tb.lignes.slice(tb.fin + 1).filter((_, k) => !reprises.has(tb.fin + 1 + k))].join('\n')
+  }
   if (texte != null) return texte.replace(/\n*$/, '\n\n') + lignes.join('\n') + '\n'
   return `# SUIVI — ${doc.plan}\n\n${lignes.join('\n')}\n\n${LEGENDE}\n`
 }
@@ -407,6 +425,8 @@ function champsPlan(ctx, lt) {
 function synchroniser(doc, L, ctx, J, { statuts }) {
   if (!L.taches) return
   const parId = new Map(L.taches.map(t => [t.id, t]))
+  let lignes = null
+  const ligne = id => { lignes = lignes || new Map((essai(() => lireSuivi(lireOu(join(ctx.dir, 'SUIVI.md')))) || []).map(l => [l.id, l])); return lignes.get(id) }
   doc.taches = doc.taches.filter(t => parId.has(t.id) || (J('tache', t.id, `${t.id} retirée du suivi : aucun fichier de tâche dans ${ctx.rel}/taches/`), false))
   for (const lt of L.taches) {
     const plan = champsPlan(ctx, lt)
@@ -414,7 +434,8 @@ function synchroniser(doc, L, ctx, J, { statuts }) {
     if (!t) {
       if (!plan.phase || !plan.modele) { J('erreur', null, `${lt.id} non ajoutée au suivi : phase ou modèle absent du frontmatter`); continue }
       if (!STATUTS.includes(lt.statut)) refuser(`SUIVI.md : statut inconnu « ${lt.statut} » pour ${lt.id} (${STATUTS.join(', ')})`)
-      t = nouvelleTache({ id: lt.id, titre: lt.titre, statut: lt.statut, ...plan })
+      const l = ligne(lt.id)
+      t = nouvelleTache({ id: lt.id, titre: lt.titre, statut: lt.statut, ...(l ? { titre: l.titre, essais: l.essais, branche: l.branche, tokens_reels: l.tokens_reels } : {}), ...plan })
       inserer(doc, t, null)
       J('ajout', t.id, `${t.id} ajoutée au suivi depuis son fichier de tâche (phase ${t.phase})`)
       continue
@@ -508,8 +529,10 @@ function ecrire(ctx, changer, { debutRun = false } = {}) {
   return sousVerrou(ctx, () => {
     const quand = maintenant()
     const existant = charger(ctx)
+    if (!existant && !L.taches) refuser(`${L.erreurs[0]} : suivi.json absent, il ne se reconstruit pas sans plan-lint ; rien n'est écrit`)
     const doc = existant || reconstruire(ctx, L, handoff, quand)
     const J = noter(doc, quand)
+    if (!L.taches) { const note = `${L.erreurs[0]} : champs de plan, statuts de git et prérequis gardés tels quels`; if (!doc.journal.slice(-20).some(e => e.texte === court(note, 300))) J('erreur', null, note) }
     if (!existant || debutRun) ignorer(ctx)
     const r = changer(doc, { L, handoff, quand, J, ctx }) || {}
     if (r.vue && existant) synchroniser(doc, L, ctx, J, { statuts: false })
@@ -829,7 +852,9 @@ function principal() {
     const ctx = localiser(arg)
     if (argv.includes('--stdout')) {
       const L = planLint(ctx), handoff = lireOu(join(ctx.dir, 'HANDOFF.md')) || '', quand = maintenant()
-      const existant = charger(ctx), doc = existant || reconstruire(ctx, L, handoff, quand)
+      const existant = charger(ctx)
+      if (!existant && !L.taches) throw new Refus(`${L.erreurs[0]} : suivi.json absent, il ne se reconstruit pas sans plan-lint`)
+      const doc = existant || reconstruire(ctx, L, handoff, quand)
       if (existant) synchroniser(doc, L, ctx, noter(doc, quand), { statuts: true })
       deriver(doc, L, handoff)
       process.stdout.write(vue(doc, lireOu(join(ctx.dir, 'SUIVI.md'))))

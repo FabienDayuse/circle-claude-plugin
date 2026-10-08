@@ -2,6 +2,27 @@
 
 Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
 
+## 0.8.1 — 08/10/2026 : sortie de plan-lint coupée à 64 Ko
+
+Trouvé en session test sur MonitIA (124 lignes dans SUIVI.md) : `/orchestre:etat` et `suivi.mjs etat` affichaient « plan-lint n'a pas rendu d'état ({) ». Le tableau de SUIVI.md avait aussi perdu toutes ses estimations (« — / voir /workflows »), et 12 lignes de tâches étaient restées sous la légende.
+
+- plan-lint : la sortie n'est plus coupée. `process.exit()`, juste après l'écriture du JSON, coupait la sortie à 65 536 octets dans un tube. C'est le cas d'un gros plan lu sans `--phase` (etat.mjs, suivi.mjs, `/orchestre:pret`). Le code de sortie passe maintenant par `process.exitCode`, avec la même valeur. etat.mjs fait de même, et les deux scripts qui lisent plan-lint acceptent une sortie jusqu'à 64 Mo.
+- `suivi.mjs`, quand plan-lint ne rend rien :
+  - sans suivi.json, plus de reconstruction : l'écriture est refusée (code 1) et rien n'est écrit. C'est ce qui avait fabriqué un suivi sans estimations ni statuts relus dans git ;
+  - avec suivi.json, les champs de plan, les statuts de git et les prérequis sont gardés tels quels, et le journal le note une fois.
+- `suivi.mjs` reprend dans le tableau les lignes de tâches écrites sous la légende par un scribe d'avant la 0.8.0, avec leurs cellules (titre, essais, branche, tokens réels). plan-lint les lisait déjà ; la vue les laissait hors du tableau.
+  - Seule compte une ligne qui a au moins les cellules de l'en-tête et un statut connu. Une ligne d'un autre tableau (notes, décisions) reste du texte, et n'empêche pas la reconstruction de suivi.json.
+  - Une ligne qui reprend une tâche déjà lue la remplace, à sa place, comme plan-lint qui garde la dernière.
+- plan-lint : une ligne d'un autre tableau sous la légende, avec moins de cellules que l'en-tête ou sans statut, n'est plus lue comme une tâche. Un tableau de notes qui citait une tâche fusionnée la faisait repasser à « à-faire ». Ce défaut existait depuis la 0.6.3.
+- plan-lint `--json` : le JSON tient sur une ligne et, avec `--phase`, ne rend que les avertissements des tâches de la phase. C'est ce que lit le lecteur-plan par l'outil Bash, qui ne montre qu'un aperçu d'une sortie trop longue. Sur un plan d'essai de 160 tâches à vérifications composées, `--phase 3` passe de 68 931 à 22 401 octets, et le plan entier de 129 915 à 102 334. Le seuil exact de l'outil Bash est une donnée à collecter.
+- Relu par un agent séparé, sur scénarios : les cas qu'il a trouvés (tableau de notes, doublon sous la légende) sont dans les tests.
+- Tests : 17 cas de plan-lint, dont un JSON de plus de 64 Ko lu par un tube ; 19 cas de suivi.mjs, dont plan-lint coupé et lignes sous la légende ; 12 mutations du correctif, toutes détectées.
+
+### Mettre à jour depuis la 0.8.0
+
+1. Entre deux runs : `/plugin marketplace update circle`, puis `/reload-plugins` ou une session neuve.
+2. Au lancement suivant, le pré-vol de `/orchestre:lancer` régénère SUIVI.md par `suivi.mjs vue`. Les estimations reviennent du frontmatter, et les lignes restées sous la légende entrent dans le tableau. Ce SUIVI.md est à commiter une fois, après accord.
+
 ## 0.8.0 — 08/10/2026 : suivi dynamique et environnement des worktrees
 
 Elle part de la 0.6.3 : il n'y a ni 0.6.4 ni 0.7.0. Deux volets : le suivi dynamique (`suivi.json`), et les correctifs tirés d'un projet réel mené en 0.6.3 (MonitIA), qui ralentissaient le plus le flux : environnement des dossiers de travail périmé, branches tenues par les worktrees des essais précédents, commandes refusées par la garde d'isolement des worktrees de Claude Code, scratchpad commun. Contrat `orchestre-suivi/1`, choix tranchés et retours du projet : dossier `0.8.0/` du dossier de travail (CONTRAT.md, ECARTS.md, RETOURS-monitia.md).

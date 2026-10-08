@@ -511,6 +511,82 @@ async function main() {
     assert.ok(V.doc().journal.some(e => e.texte === 'T01 : à-faire → fusionnée (SUIVI.md et git)'))
   })
 
+  await cas('plan-lint sans réponse (sortie coupée) : pas de reconstruction ; suivi.json existant, champs de plan gardés et une note au journal (0.8.1)', () => {
+    const F = depot('lintko', { taches: [{ id: 'T01' }, { id: 'T02', estimation: '2.5M' }], suivi: SUIVI_GABARIT(['T01', 'T02']) })
+    // Copie du script à côté d'un plan-lint qui rend un JSON coupé, comme dans un tube avant la 0.8.1
+    const bin = temp('lint-coupe-')
+    writeFileSync(join(bin, 'suivi.mjs'), readFileSync(SUIVI, 'utf8'))
+    writeFileSync(join(bin, 'plan-lint.mjs'), "process.stdout.write('{\\n  \"ok\": true,\\n  \"taches\": [')\n")
+    const coupe = (cmd, E) => { const r = spawnSync(process.execPath, [join(bin, 'suivi.mjs'), cmd, F.plan, '--json', JSON.stringify(E)], { cwd: F.racine, encoding: 'utf8' }); return { code: r.status, out: r.stdout.trim(), err: r.stderr.trim() } }
+    const avant = F.lire('SUIVI.md')
+    const r1 = coupe('debut-run', RUN)
+    assert.equal(r1.code, 1, r1.out + r1.err)
+    assert.match(r1.err, /plan-lint n'a pas rendu d'état \(\{\) : suivi\.json absent, il ne se reconstruit pas sans plan-lint/)
+    assert.ok(!existsSync(join(F.d, 'suivi.json'))); assert.equal(F.lire('SUIVI.md'), avant); assert.deepEqual(F.restes(), [])
+    assert.equal(F.suivi('debut-run', RUN).code, 0)
+    assert.equal(coupe('etape', { tache: 'T01', etape: 'worker', isole: false }).code, 0)
+    const r2 = coupe('cloture', { tache: 'T01', statut: 'bloquée', essais: 1, branche: 'tache/T01', blocage: ['x'] })
+    assert.equal(r2.code, 0, r2.err)
+    const doc = F.doc()
+    assert.deepEqual(doc.taches.map(t => [t.id, t.statut, t.estimation_tokens]), [['T01', 'bloquée', 1], ['T02', 'à-faire', 2.5]])
+    assert.equal(doc.lint.ok, false)
+    assert.equal(doc.journal.filter(e => e.genre === 'erreur' && /plan-lint n'a pas rendu d'état/.test(e.texte)).length, 1, 'une seule note, pas une par écriture')
+    assert.match(F.lire('SUIVI.md').split('\n').find(l => l.startsWith('| T02 ')), /\| 2,5 M \/ — +\|/)
+    assert.match(F.lire('SUIVI.md').split('\n').find(l => l.startsWith('| T01 ')), /\| bloquée +\| 1 +\| tache\/T01 +\| 1,0 M \//)
+    assert.equal(F.suivi('valider').code, 0)
+  })
+
+  await cas('lignes de tâches écrites sous la légende (scribe 0.6.3) : reprises dans le tableau, avec leurs cellules ; suivi.json 0.8.0 appauvri réparé (0.8.1)', () => {
+    const texte = `# SUIVI — orph
+
+| ID  | Titre | Phase | Lot | Dépend de | Modèle | Statut    | Essais | Branche | Tokens est. / réels |
+|-----|-------|-------|-----|-----------|--------|-----------|--------|---------|---------------------|
+| T01 | Court | 1     | 1A  | —         | sonnet | fusionnée | 1      | tache/T01 | — / voir /workflows |
+
+Statuts : à-faire · ajoutée · fusionnée · bloquée · échec · besoin-humain · annulée
+| T01B | Ajoutée par le scribe | 1 | 1B | T01 | sonnet | fusionnée | 3 | tache/T01B-r2 | 0,5 M / voir /workflows |
+| T02 | Suite | 2 | 2A | T01 | sonnet | à-faire | 0 | — | 1,0 M / — |
+`
+    const F = depot('orph', { taches: [{ id: 'T01' }, { id: 'T01B', depend_de: ['T01'], estimation: '0.5M' }, { id: 'T02', phase: 2, depend_de: ['T01'] }], suivi: texte })
+    assert.deepEqual(F.lint().taches.map(t => [t.id, t.statut]), [['T01', 'fusionnée'], ['T01B', 'fusionnée'], ['T02', 'à-faire']], 'plan-lint lit déjà les lignes sous la légende')
+    // État laissé par une 0.8.0 dont plan-lint était coupé : suivi.json sans T01B ni T02, estimations effacées
+    assert.equal(F.suivi('debut-run', RUN).code, 0)
+    const d = F.doc()
+    d.taches = d.taches.filter(t => t.id === 'T01').map(t => ({ ...t, estimation_tokens: null }))
+    writeFileSync(join(F.d, 'suivi.json'), JSON.stringify(d, null, 2) + '\n')
+    writeFileSync(join(F.d, 'SUIVI.md'), texte)
+    const r = F.suivi('vue')
+    assert.equal(r.code, 0, r.err)
+    const doc = F.doc()
+    assert.deepEqual(doc.taches.map(t => [t.id, t.titre, t.statut, t.essais, t.branche, t.estimation_tokens]), [
+      ['T01', 'Court', 'fusionnée', 1, 'tache/T01', 1], ['T01B', 'Ajoutée par le scribe', 'fusionnée', 3, 'tache/T01B-r2', 0.5], ['T02', 'Suite', 'à-faire', 0, null, 1]])
+    const lignes = F.lire('SUIVI.md').split('\n')
+    const legende = lignes.findIndex(l => l.startsWith('Statuts :'))
+    for (const id of ['T01', 'T01B', 'T02']) {
+      const ou = lignes.map((l, i) => (l.startsWith(`| ${id} `) ? i : -1)).filter(i => i >= 0)
+      assert.equal(ou.length, 1, `${id} une seule fois`); assert.ok(ou[0] < legende, `${id} dans le tableau, avant la légende`)
+    }
+    assert.equal(lignes.slice(legende + 1).filter(l => l.startsWith('|')).length, 0)
+    assert.match(lignes.find(l => l.startsWith('| T01B ')), /\| tache\/T01B-r2 +\| 0,5 M \/ voir \/workflows +\|/)
+    assert.equal(F.lint().ok, true)
+    assert.equal(F.suivi('valider').code, 0)
+    // Une ligne sous la légende dont l'ID n'est pas une tâche du plan reste du texte
+    writeFileSync(join(F.d, 'SUIVI.md'), F.lire('SUIVI.md') + '| T99 | inconnue | 1 | — | — | sonnet | à-faire | 0 | — | — / — |\n')
+    assert.equal(F.suivi('vue').code, 0)
+    assert.equal(F.lire('SUIVI.md').split('\n').filter(l => l.startsWith('| T99 ')).length, 1)
+    // Sans suivi.json : un tableau de notes sous la légende reste du texte ; une ligne qui reprend T02 la remplace, à sa place
+    rmSync(join(F.d, 'suivi.json'))
+    const notes = '\n## Notes du pilote\n\n| ID | Note |\n|----|------|\n| T01 | relancée à la main le 07/10 |\n| D1 | tranchée : option B |\n'
+    writeFileSync(join(F.d, 'SUIVI.md'), texte.replace('| T02 | Suite | 2 | 2A | T01 | sonnet | à-faire | 0 | — | 1,0 M / — |\n', '| T02 | Suite | 2 | 2A | T01 | sonnet | à-faire | 0 | — | 1,0 M / — |\n| T02 | Suite reprise | 2 | 2A | T01 | sonnet | fusionnée | 4 | tache/T02 | 1,0 M / voir /workflows |\n') + notes)
+    const r2 = F.suivi('debut-run', RUN)
+    assert.equal(r2.code, 0, r2.err)
+    assert.deepEqual(F.doc().taches.map(t => [t.id, t.statut, t.essais]), [['T01', 'fusionnée', 1], ['T01B', 'fusionnée', 3], ['T02', 'fusionnée', 4]])
+    assert.equal(F.suivi('vue').code, 0)
+    const fin = F.lire('SUIVI.md')
+    assert.ok(fin.endsWith(notes), 'notes du pilote gardées octet pour octet')
+    assert.equal(fin.split('\n').filter(l => l.startsWith('| T02 ')).length, 1)
+  })
+
   console.log(`suivi : TOUT EST VERT (${n} cas)`)
 }
 

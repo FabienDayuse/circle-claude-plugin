@@ -220,6 +220,32 @@ try {
     assert.deepEqual(a.map(x => x.match(/« (.*) » \((.*?)\) :/).slice(1)), oui)
   })
 
+  cas('JSON de plus de 64 Ko lu par un tube : sortie complète, code de sortie gardé (0.8.1)', () => {
+    // process.exit() juste après console.log coupait la sortie à 65 536 octets dans un tube (MonitIA, 08/10)
+    const ts = {}
+    for (let i = 1; i <= 220; i++) { const id = `T${String(i).padStart(3, '0')}`; ts[id] = tache(id, { phase: Math.ceil(i / 20), verification: [`"pnpm test -- src/${id} --reporter=verbose"`, `"sh scripts/e2e-local.sh ${id}"`] }) }
+    const d = plan('gros', ts)
+    const tube = spawnSync('sh', ['-c', `node "${LINT}" "${d}" --json | cat`], { cwd: racine, encoding: 'utf8' })
+    assert.ok(Buffer.byteLength(tube.stdout) > 65536, `sortie trop petite pour le cas : ${Buffer.byteLength(tube.stdout)} octets`)
+    assert.equal(JSON.parse(tube.stdout).taches.length, 220)
+    const direct = spawnSync('node', [LINT, d, '--json'], { cwd: racine, encoding: 'utf8' })
+    assert.equal(direct.stdout, tube.stdout); assert.equal(direct.status, 0)
+    const ko = plan('gros-ko', { ...ts, T999: tache('T999', { depend_de: '[T000]' }) })
+    const r = spawnSync('sh', ['-c', `node "${LINT}" "${ko}" --json | cat; exit 0`], { cwd: racine, encoding: 'utf8' })
+    assert.equal(JSON.parse(r.stdout).ok, false)
+    assert.equal(spawnSync('node', [LINT, ko, '--json'], { cwd: racine, encoding: 'utf8' }).status, 1)
+  })
+
+  cas('SUIVI.md : une ligne d\'un autre tableau sous la légende n\'est pas une tâche ; --phase ne rend que les avertissements de la phase (0.8.1)', () => {
+    const d = plan('notes', { T01: tache('T01'), T02: tache('T02', { phase: 2, verification: ['"cd web && npm test"'] }), T03: tache('T03', { phase: 1, verification: ['"cd api && npm test"'] }) }, [['T01', 'fusionnée'], ['T02', 'à-faire'], ['T03', 'à-faire']])
+    writeFileSync(join(racine, d, 'SUIVI.md'), SUIVI([['T01', 'fusionnée'], ['T02', 'à-faire'], ['T03', 'à-faire']]) + '\nStatuts : à-faire · fusionnée\n\n## Notes du pilote\n\n| ID | Note |\n|----|------|\n| T01 | relancée à la main le 07/10 |\n| D1 | tranchée : option B |\n')
+    const r = lint(d, '--json')
+    assert.equal(r.json.taches.find(t => t.id === 'T01').statut, 'fusionnée')
+    assert.equal(r.json.avertissements.length, 2)
+    const p2 = spawnSync('node', [LINT, d, '--json', '--phase', '2'], { cwd: racine, encoding: 'utf8' })
+    assert.deepEqual(JSON.parse(p2.stdout).avertissements.map(a => a.slice(0, 3)), ['T02'])
+  })
+
   console.log(`plan-lint : TOUT EST VERT (${n} cas)`)
 } finally {
   rmSync(racine, { recursive: true, force: true })

@@ -47,7 +47,7 @@ function etat() {
   if ([integ, baseCfg].some(b => b && String(b).startsWith('-'))) return 'orchestre:etat : branche invalide dans orchestre.config.json'
 
   // plan-lint fait foi pour les tâches, leurs statuts (git compris) et les prérequis
-  const r = spawnSync(process.execPath, [LINT, relative(racine, dir) || '.', '--json', '--integration', integ, ...(baseCfg ? ['--base', baseCfg] : [])], { cwd: racine, env: ENV, encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [LINT, relative(racine, dir) || '.', '--json', '--integration', integ, ...(baseCfg ? ['--base', baseCfg] : [])], { cwd: racine, env: ENV, encoding: 'utf8', maxBuffer: 1 << 26 })
   const L = essai(() => JSON.parse(r.stdout))
   if (!L) return `orchestre:etat : plan-lint n'a pas rendu d'état (${String(r.stderr || r.stdout || 'sans message').trim().split('\n')[0]})`
   const actives = (L.taches || []).filter(t => t.statut !== 'annulée')
@@ -113,4 +113,5 @@ function etat() {
 let texte
 try { texte = etat() } catch (e) { texte = `orchestre:etat : ${String((e && e.message) || e).split('\n')[0]}` }
 console.log(texte)
-process.exit(0)
+// Pas de process.exit() : dans un tube, il pourrait couper la sortie (0.8.1)
+process.exitCode = 0

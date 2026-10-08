@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// plan-lint (plugin orchestre 0.8.0) : valide un dossier de plan et le compile en JSON. Node 18 ou plus, aucune dépendance.
+// plan-lint (plugin orchestre 0.8.1) : valide un dossier de plan et le compile en JSON. Node 18 ou plus, aucune dépendance.
 // Usage : node <racine du plugin>/scripts/plan-lint.mjs <dossier-plan> [--json] [--phase N] [--integration <branche>] [--base <branche>]
 // Avec --integration, une tâche dont le commit de fusion « tâche <id> : » est sur la branche d'intégration, et pas sur la branche de base
 // (--base, sinon main, sinon master), compte comme fusionnée : git fait foi. La base écarte les fusions des plans précédents déjà dans main.
@@ -95,8 +95,9 @@ function statuts() {
   for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
     if (!line.trim().startsWith('|')) continue
     const cells = cellules(line)
-    if (!cols && cells.includes('ID') && cells.includes('Statut')) { cols = { id: cells.indexOf('ID'), st: cells.indexOf('Statut') }; continue }
-    if (cols && /^[A-Z]+\d+[A-Z]*$/.test(cells[cols.id] || '')) map[cells[cols.id]] = cells[cols.st]
+    if (!cols && cells.includes('ID') && cells.includes('Statut')) { cols = { id: cells.indexOf('ID'), st: cells.indexOf('Statut'), n: cells.length }; continue }
+    // Une ligne d'un autre tableau (moins de cellules que l'en-tête, ou sans statut) n'est pas une tâche (0.8.1)
+    if (cols && cells.length >= cols.n && cells[cols.st] && /^[A-Z]+\d+[A-Z]*$/.test(cells[cols.id] || '')) map[cells[cols.id]] = cells[cols.st]
   }
   return map
 }
@@ -210,7 +211,8 @@ const orphelins = prereqs.filter(x => x.type !== 'décision' && x.statut === 'ou
 
 // Commandes de vérification des tâches restantes : composées, elles seraient refusées à un agent isolé dans un worktree
 const refusable = 'un agent isolé dans un worktree se la verra refuser (garde d\'isolement de Claude Code) : en faire une commande simple, ou un script du projet'
-for (const t of T.values()) if (!fait(st[t.id] || 'à-faire')) for (const c of arr(t.verification)) {
+// Avec --phase, seulement les tâches de la phase : le lecteur-plan n'a besoin que d'elles, et la sortie reste courte (0.8.1)
+for (const t of T.values()) if (!fait(st[t.id] || 'à-faire') && (phaseF == null || t.phase === phaseF)) for (const c of arr(t.verification)) {
   const r = composee(c)
   if (r.length) avertissements.push(`${t.id} : vérification « ${courte(c)} » (${r.join(', ')}) : ${refusable}`)
 }
@@ -233,7 +235,8 @@ if (config && config.preparation_partagee !== undefined) {
   }
 }
 const pretVu = pret.filter(p => phaseF == null || p.phase === phaseF)
-if (asJson) console.log(JSON.stringify({ ok: erreurs.length === 0, erreurs, avertissements, taches, tous, phase_max, prerequis: prereqs, pret: pretVu }, null, 2))
+// JSON sur une ligne : lu par des scripts et des agents, il reste ainsi sous les seuils d'affichage de l'outil Bash plus longtemps (0.8.1)
+if (asJson) console.log(JSON.stringify({ ok: erreurs.length === 0, erreurs, avertissements, taches, tous, phase_max, prerequis: prereqs, pret: pretVu }))
 else {
   if (erreurs.length) console.log(erreurs.map(e => '✗ ' + e).join('\n'))
   else {
@@ -261,4 +264,5 @@ else {
   }
 }
 if (!asJson) for (const a of avertissements) console.log('⚠ ' + a)
-process.exit(erreurs.length ? 1 : 0)
+// Pas de process.exit() ici : dans un tube, il couperait la sortie à 64 Ko (le JSON d'un gros plan, 0.8.1)
+process.exitCode = erreurs.length ? 1 : 0
