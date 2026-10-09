@@ -59,7 +59,7 @@ export function normaliser(brut) {
     if (n > 0) majeures[type] = (majeures[type] || 0) + n
   }
   return {
-    plan: texte(brut.plan), dossier: texte(brut.dossier), maj: date(brut.maj),
+    demo: false, plan: texte(brut.plan), dossier: texte(brut.dossier), maj: date(brut.maj),
     taches,
     runs: runs.map(runVue),
     run: dernier ? runVue(dernier) : null,
@@ -386,7 +386,7 @@ function ligneBandeau(inst, s, maintenant, f, anime) {
   const tete = s.silence ? { t: '◌ ', c: 'warning' } : enCoursRun ? { t: `${anime ? roue(maintenant) : '▶'} `, c: 'claude' } : run.statut === 'terminé' ? { t: '✓ ', c: 'success' } : { t: '■ ', c: 'warning' }
   const phase = phaseDuRun(inst)
   /** @type {Ligne} */
-  const l = [{ ...tete, b: true }, { t: court(inst.plan, f.nom), b: true }, { t: '  ' }]
+  const l = [{ ...tete, b: true }, ...(inst.demo ? [{ t: ' DÉMO ', c: 'inverseText', f: 'merged', b: true }, { t: ' ' }] : []), { t: court(inst.plan, f.nom), b: true }, { t: '  ' }]
   const points = pointsPhases(s.phases, phase)
   if (points) l.push(...points)
   else l.push({ t: `phase ${phase}/${s.phaseMax}`, d: true })

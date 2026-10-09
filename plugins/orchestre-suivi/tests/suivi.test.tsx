@@ -3,6 +3,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import { bandeau, largeur, normaliser } from '../hooks/modele.mjs'
+import { NB_PAS, instantDuPas, instantaneDemo } from '../hooks/demo.mjs'
 
 const RACINE = '/depot'
 const SUIVI = `${RACINE}/plans/demo/suivi.json`
@@ -146,7 +147,7 @@ function etat(on: On) {
     valeurs.set(e.key, { value: e.value, version: avant + 1 })
     return { value: { isSet: true, version: avant + 1 } } as never
   })
-  return { effacer: () => valeurs.clear() }
+  return { effacer: () => valeurs.clear(), poser: (key: string, value: unknown) => { valeurs.set(key, { value, version: 1 }) } }
 }
 
 const FINI = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'] })], {
@@ -229,5 +230,92 @@ test('run resté « en-cours » sans nouvelles : plus d\'animation, mais son âg
   expect(await ui.find({ text: /sans nouvelles depuis 50 min/ })).toBeDefined()
   await horloge.advance(61000)
   expect(await ui.find({ text: /sans nouvelles depuis 51 min/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const CMD = (args: string) => ({ command: 'suivi', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } }) as never
+
+test('/suivi demo, sans dépôt : un run joué en mémoire, marqué DÉMO, ses notifications, puis retour au vrai suivi', { timeoutMs: 30000 }, async ($, on) => {
+  const horloge = mock.clock(on, { now: T0 })
+  const toasts: string[] = [], lus: string[] = []
+  bas(on)
+  on('fs.exists', ($, e) => { lus.push(e.path); return { value: false } })
+  on('ui.toast', ($, e) => { toasts.push(e.text + (e.timeoutMs ? ` (${e.timeoutMs} ms)` : '')); return { value: undefined } })
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  const r = await $.command.run(CMD('demo'))
+  expect(r.text ?? '').toMatch(/^Démo lancée/)
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect((await ui.find({ type: 'Text', text: ' DÉMO ' }))?.props.backgroundColor).toBe('merged')
+  expect(await ui.find({ text: /^site-vitrine$/ })).toBeDefined()
+  expect(await ui.find({ text: ROUE })).toBeDefined()
+  expect((await $.command.run(CMD('texte'))).text ?? '').toMatch(/^▶  DÉMO  site-vitrine/)
+  // Pendant la démo, aucun suivi.json n'est cherché
+  const avant = lus.length
+  await horloge.advance(instantDuPas(NB_PAS - 1, 0) + 500)
+  expect(lus.length).toBe(avant)
+  expect(await ui.find({ text: /^✓ $/ })).toBeDefined()
+  expect(toasts).toContain('⚑ T03 attend un humain (15000 ms)')
+  expect(toasts).toContain('Run arrêté : T03, Clé SMTP de test (15000 ms)')
+  expect(toasts).toContain('Phase 1 terminée')
+  expect(toasts).toContain('Run 2 (phases 1 à 2) : terminé')
+  expect(toasts.at(-1) ?? '').toMatch(/^Démo terminée/)
+  await ui.unmount()
+  // Une minute après la fin, le vrai suivi reprend : ici, rien à suivre
+  await horloge.advance(60000)
+  expect(lus.length).toBeGreaterThan(avant)
+  const apres = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await apres.find({ type: 'Text', text: ' DÉMO ' })).toBeUndefined()
+  await apres.unmount()
+})
+
+test('/suivi demo dans un dépôt suivi : le vrai plan attend, /suivi auto y revient', async ($, on) => {
+  const horloge = mock.clock(on, { now: T0 })
+  const w = monde(on)
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  await $.command.run(CMD('demo'))
+  // suivi.json change pendant la démo : rien n'est lu, aucune notification du vrai plan
+  w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'] }), tache('T03', 2)])
+  w.fichier.mtime = 2
+  await horloge.advance(2100)
+  expect(w.toasts.some(t => t.includes('T02 attend'))).toBe(false)
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await ui.find({ text: /^site-vitrine$/ })).toBeDefined()
+  await ui.unmount()
+  expect((await $.command.run(CMD('auto texte'))).text ?? '').toMatch(/^▶ demo {2}/)
+  const vrai = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await vrai.find({ type: 'Text', text: ' DÉMO ' })).toBeUndefined()
+  expect(await vrai.find({ text: /^demo$/ })).toBeDefined()
+  await vrai.unmount()
+})
+
+test('« Masquer » pendant la démo ne masque pas le vrai run de même numéro', async ($, on) => {
+  const horloge = mock.clock(on, { now: T0 })
+  const w = monde(on)
+  w.fichier.texte = FINI
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  await $.command.run(CMD('demo'))
+  // Le run 1 de la démo s'arrête sur son arbitrage : on le masque
+  await horloge.advance(instantDuPas(11, 0) + 100)
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await ui.find({ text: /^site-vitrine$/ })).toBeDefined()
+  await ui.press({ key: 'masquer' })
+  await ui.unmount()
+  await $.command.run(CMD('auto'))
+  const vrai = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await vrai.find({ text: /^■ $/ })).toBeDefined()
+  expect(await vrai.find({ text: /^demo$/ })).toBeDefined()
+  await vrai.unmount()
+})
+
+test('rechargement du mod en pleine démo, sans rien à suivre : la démo figée s\'efface', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const memoire = etat(on)
+  bas(on)
+  on('fs.exists', () => ({ value: false }))
+  // Ce que $.state garde d'avant le rechargement : la dernière image de la démo
+  memoire.poser('instantane', instantaneDemo(5, T0 - 20000))
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'orchestre-suivi', surface: 'terminal', ...BAND })
+  expect(await ui.find({ type: 'Text', text: ' DÉMO ' })).toBeUndefined()
   await ui.unmount()
 })

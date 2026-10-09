@@ -1,5 +1,6 @@
-// Démo du mod orchestre-suivi : un dépôt jouet, puis deux runs joués pas à pas par le vrai scripts/suivi.mjs, sans agent
-// ni modèle. On regarde pendant ce temps une session Claude Code ouverte dans le dépôt, avec le mod chargé.
+// Le scénario de /suivi demo (plugins/orchestre-suivi/hooks/demo.mjs) joué par le vrai scripts/suivi.mjs : un dépôt
+// jouet, puis deux runs pas à pas, sans agent ni modèle. tests/orchestre-suivi.test.mjs s'en sert pour vérifier que la
+// démo du mod dit la même chose (notifications, journal). On peut aussi regarder une session ouverte dans le dépôt.
 // Après chaque pas, la démo affiche ce que le mod doit montrer, calculé par son propre modèle (hooks/modele.mjs), en
 // texte : dans Claude Code, le même bandeau est en couleurs et s'anime. Ce qui diffère dans la session vient du dessin
 // ou du chargement du mod, pas des données.

@@ -10,6 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Instantane, Ligne, Onglet } from '../types'
+import { NB_PAS, PAS_DEMO_MS, PLAN_DEMO, finDemo, instantaneDemo, pasA } from './demo.mjs'
 import { DUREE_IMPORTANTE_MS, FORMAT, IMAGE_MS, bandeau, changements, formatDe, importante, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, nouvelle, runActif, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
 
 const PANNEAU = 'orchestre-suivi'
@@ -68,16 +69,18 @@ async function lireJson($: EngineInterface, chemin: string): Promise<unknown> {
   }
 }
 
-// Relit suivi.json s'il a changé (ou si c'est un autre fichier), met l'instantané à jour et notifie ce qui le mérite
+// Relit suivi.json s'il a changé (ou si c'est un autre fichier), met l'instantané à jour et notifie ce qui le mérite.
+// Pendant la démo, rien n'est lu. Une démo restée affichée après un rechargement du mod s'efface s'il n'y a rien à suivre.
 let dernierFichier: string | null = null
 async function rafraichir($: EngineInterface, force: boolean): Promise<void> {
+  if (demo) return
   const base = await racine($)
-  if (!base) return
+  if (!base) return oublierDemo($)
   const plan = await trouverPlan($, base)
-  if (!plan) return
+  if (!plan) return oublierDemo($)
   const f = `${base}/${plan}/suivi.json`
   const st = await $.fs.stat(f).catch(() => null)
-  if (!st) return
+  if (!st) return oublierDemo($)
   if (!force && f === dernierFichier && st.mtimeMs === (await read($, lu))) return
   const doc = await lireJson($, f)
   if (doc === null) return
@@ -98,6 +101,48 @@ async function rafraichir($: EngineInterface, force: boolean): Promise<void> {
   for (const message of changements(avant, apres)) $.ui.toast(message, importante(message) ? { timeoutMs: DUREE_IMPORTANTE_MS } : undefined)
 }
 
+async function oublierDemo($: EngineInterface): Promise<void> {
+  if ((await read($, instantane))?.demo) await update($, instantane, () => null)
+}
+
+// Le mode démo (/suivi demo) : un run joué en mémoire, pas à pas, avec ses notifications ; la dernière image reste une
+// minute, puis le vrai suivi reprend. Le « Masquer » d'un run de la démo ne vaut pas pour les vrais runs.
+let demo: { debut: number; pas: number; vu: number; fini: boolean } | null = null
+async function lancerDemo($: EngineInterface): Promise<void> {
+  demo = { debut: await $.clock.now(), pas: PAS_DEMO_MS, vu: -1, fini: false }
+  masqueChoisi = null
+  await update($, masque, () => null)
+  await avancerDemo($)
+}
+async function avancerDemo($: EngineInterface): Promise<void> {
+  if (!demo) return
+  const maintenant = await $.clock.now()
+  if (maintenant >= finDemo(demo.debut, demo.pas)) return quitterDemo($)
+  const k = Math.max(0, pasA(maintenant, demo.debut, demo.pas))
+  const avant = await read($, instantane)
+  // Après /clear, l'image courante revient sans notification
+  if (k === demo.vu && avant?.demo) return
+  const suite = demo.vu >= 0 && !!avant?.demo
+  demo.vu = k
+  const apres = instantaneDemo(k, demo.debut, demo.pas)
+  await update($, instantane, () => apres)
+  if (suite) for (const message of changements(avant, apres)) $.ui.toast(message, importante(message) ? { timeoutMs: DUREE_IMPORTANTE_MS } : undefined)
+  if (k === NB_PAS - 1 && !demo.fini) {
+    demo.fini = true
+    $.ui.toast('Démo terminée. Le vrai suivi reprend dans une minute ; /suivi auto pour tout de suite.', { timeoutMs: DUREE_IMPORTANTE_MS })
+  }
+}
+async function quitterDemo($: EngineInterface): Promise<void> {
+  if (!demo) return
+  demo = null
+  masqueChoisi = null
+  await update($, masque, () => null)
+  await update($, instantane, () => null)
+  await update($, lu, () => 0)
+  dernierFichier = null
+  await rafraichir($, true).catch(() => undefined)
+}
+
 // On ne suit que là où quelque chose se dessine : le terminal (REPL), ou une session que l'app de bureau héberge,
 // qui démarre sans surface et en reçoit une à la connexion de l'app (session.attach). Un `claude -p` ne lit rien.
 let demarre = false
@@ -109,7 +154,7 @@ async function demarrer($: EngineInterface): Promise<void> {
   $.clock.every(IMAGE_MS, () => { void animer($).catch(() => undefined) })
   // En dernier : un nom déjà pris fait échouer l'enregistrement, et le suivi doit tourner quand même
   try {
-    await $.command.register({ name: 'suivi', description: 'Suivi du plan orchestre : tâches, relectures, journal, bilan', argumentHint: '[plans/<nom> | auto] [texte]', immediate: true })
+    await $.command.register({ name: 'suivi', description: 'Suivi du plan orchestre : tâches, relectures, journal, bilan', argumentHint: '[plans/<nom> | auto | demo] [texte]', immediate: true })
   } catch (err) {
     $.ui.toast(`orchestre-suivi : /suivi n'a pas pu être ajoutée (${err instanceof Error ? err.message : String(err)}). Le bandeau et les notifications restent actifs.`, { timeoutMs: DUREE_IMPORTANTE_MS })
   }
@@ -119,6 +164,7 @@ async function demarrer($: EngineInterface): Promise<void> {
 // (spinner, barre qui pulse, chronos, nouvelle qui s'estompe). Un run sans nouvelles ne bouge plus : toutes les 30 s.
 let dernierRedessin = 0
 async function animer($: EngineInterface): Promise<void> {
+  if (demo) await avancerDemo($)
   const inst = await read($, instantane)
   if (!inst) return
   const maintenant = await $.clock.now()
@@ -157,6 +203,10 @@ export const register: Register = on => {
   // /suivi répond tout de suite, même pendant un tour : le panneau, ou l'état en texte
   on('command.run', { command: 'suivi' }, async ($, e) => {
     const mots = e.args.trim().split(/\s+/).filter(Boolean)
+    if (mots.includes('demo') || mots.includes('démo')) {
+      await lancerDemo($)
+      return { text: `Démo lancée : le run d'un plan fictif, ${PLAN_DEMO} (5 tâches, 2 phases), joué en un peu plus d'une minute dans le bandeau et les notifications, marqué DÉMO. /suivi ouvre le panneau ; /suivi auto revient au vrai suivi.` }
+    }
     const plan = mots.find(m => m.startsWith('plans/'))
     if (plan) {
       planChoisi = plan.replace(/\/+$/, '')
@@ -166,12 +216,13 @@ export const register: Register = on => {
       planChoisi = null
       await update($, planSuivi, () => null)
     }
+    if (plan || mots.includes('auto')) await quitterDemo($)
     await rafraichir($, true).catch(() => undefined)
     const inst = await read($, instantane)
-    if (!inst) return { text: 'orchestre-suivi : aucun plans/<nom>/suivi.json dans ce dépôt. Il apparaît au premier run d\'orchestre 0.8 ou plus.' }
+    if (!inst) return { text: 'orchestre-suivi : aucun plans/<nom>/suivi.json dans ce dépôt. Il apparaît au premier run d\'orchestre 0.8 ou plus. Pour voir le mod à l\'œuvre : /suivi demo.' }
     const maintenant = await $.clock.now()
     if (mots.includes('texte')) return { text: texteEtat(inst, maintenant) }
-    const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}`, focus: true, closeOnEscape: true }).catch(() => null)
+    const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}${inst.demo ? ' (démo)' : ''}`, focus: true, closeOnEscape: true }).catch(() => null)
     return ouvert?.isPlaced ? { text: `Suivi de ${inst.plan} ouvert dans le panneau.` } : { text: texteEtat(inst, maintenant) }
   })
 

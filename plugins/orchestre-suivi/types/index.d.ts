@@ -41,6 +41,8 @@ export type PhaseVue = {
 }
 
 export type Instantane = {
+  // Le run joué par /suivi demo, en mémoire : rien ne vient d'un suivi.json
+  demo: boolean
   plan: string
   dossier: string
   maj: number | null

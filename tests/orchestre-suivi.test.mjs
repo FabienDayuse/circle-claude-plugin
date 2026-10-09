@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync, spawnSync } from 'node:child_process'
 import * as M from '../plugins/orchestre-suivi/hooks/modele.mjs'
+import * as D from '../plugins/orchestre-suivi/hooks/demo.mjs'
 
 const SUIVI = resolve('plugins/orchestre/scripts/suivi.mjs')
 const racine = mkdtempSync(join(tmpdir(), 'orchestre-suivi-'))
@@ -21,6 +22,8 @@ const lire = () => M.normaliser(JSON.parse(readFileSync(join(d, 'suivi.json'), '
 const texte = lignes => lignes.map(M.brut).join('\n')
 let n = 0
 const cas = (nom, fn) => { fn(); n++; console.log('ok ·', nom) }
+/** @type {string[]} */
+let notifsScript = []
 
 try {
   git('init', '-q', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't'); git('config', 'commit.gpgsign', 'false')
@@ -251,6 +254,36 @@ try {
     assert.deepEqual([Z.runs.length, Z.run.statut, Z.taches.filter(t => t.statut === 'fusionnée').length, Z.relectures.length, Z.decisions.length], [2, 'terminé', 5, 3, 1])
     const deja = spawnSync(process.execPath, [resolve('tests/demo-suivi.mjs'), join(racine, 'demo')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     assert.equal(deja.status, 1, 'dossier existant refusé'); assert.match(deja.stderr, /existe déjà/)
+    notifsScript = [...r.stdout.matchAll(/^ +notification (.*)$/gm)].map(x => x[1])
+  })
+
+  cas('/suivi demo : chaque pas suit le schéma du contrat, et annonce les mêmes notifications que le vrai suivi.mjs', () => {
+    const T = Date.parse('2026-10-09T10:00:00Z')
+    for (let k = 0; k < D.NB_PAS; k++) {
+      const f = join(racine, `demo-${k}.json`)
+      writeFileSync(f, JSON.stringify(D.docDemo(k, T)))
+      const v = spawnSync(process.execPath, [SUIVI, 'valider', '--fichier', f], { encoding: 'utf8' })
+      assert.equal(v.status, 0, `pas ${k} : ${v.stderr}`)
+    }
+    /** @type {string[]} */
+    const notifs = []
+    let avant = null
+    for (let k = 0; k < D.NB_PAS; k++) { const apres = D.instantaneDemo(k, T); notifs.push(...M.changements(avant, apres)); avant = apres }
+    assert.ok(notifsScript.length >= 8, notifsScript.join(' | '))
+    assert.deepEqual(notifs, notifsScript, 'mêmes notifications que tests/demo-suivi.mjs, joué par le vrai suivi.mjs')
+    // Même journal, entrée pour entrée, hors la reconstruction du premier suivi.json
+    const vrai = JSON.parse(readFileSync(join(racine, 'demo', 'plans', 'demo', 'suivi.json'), 'utf8')).journal.filter(j => !/^suivi\.json reconstruit/.test(j.texte))
+    assert.deepEqual(D.docDemo(D.NB_PAS - 1, T).journal.map(j => `${j.genre} | ${j.texte}`), vrai.map(j => `${j.genre} | ${j.texte}`))
+    assert.deepEqual([avant.runs.length, avant.run.statut, avant.taches.filter(t => t.statut === 'fusionnée').length, avant.relectures.length, avant.decisions.length], [2, 'terminé', 5, 3, 1])
+    // Le bandeau dit que c'est une démo
+    const b = M.bandeau(D.instantaneDemo(3, T), D.instantDuPas(3, T), 140)
+    assert.match(M.brut(b), /^▶  DÉMO  site-vitrine {2}◉○ /); assert.ok(b.some(m => m.t === ' DÉMO ' && m.f === 'merged'))
+    assert.equal(M.normaliser(D.docDemo(3, T)).demo, false, 'un vrai suivi.json n\'est jamais une démo')
+    // Le temps : un pas toutes les 3 s, une pause de 12 s à l'arrêt du run 1, puis une minute avant le retour au vrai suivi
+    assert.deepEqual([D.pasA(T - 1, T), D.pasA(T, T), D.pasA(T + 2999, T), D.pasA(T + 3000, T)], [-1, 0, 0, 1])
+    assert.equal(D.instantDuPas(12, T) - D.instantDuPas(11, T), 4 * D.PAS_DEMO_MS)
+    assert.equal(D.finDemo(T), D.instantDuPas(D.NB_PAS - 1, T) + 60000, 'le vrai suivi reprend une minute après le dernier pas')
+    assert.equal(D.pasA(D.finDemo(T), T), D.NB_PAS - 1)
   })
 
   console.log(`orchestre-suivi : TOUT EST VERT (${n} cas)`)
