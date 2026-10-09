@@ -9,11 +9,13 @@
 /** @typedef {import('../types/index.d.ts').RunVue} RunVue */
 /** @typedef {import('../types/index.d.ts').Morceau} Morceau */
 /** @typedef {import('../types/index.d.ts').Ligne} Ligne */
+/** @typedef {import('../types/index.d.ts').Carte} Carte */
 
 export const FORMAT = 'orchestre-suivi/1'
 export const STATUTS = ['à-faire', 'ajoutée', 'fusionnée', 'bloquée', 'échec', 'besoin-humain', 'annulée']
 const ATTENTION = { 'besoin-humain': 'attend un humain', bloquée: 'bloquée', échec: 'en échec' }
-const JOURNAL_VU = 40
+// Tout le journal de suivi.json (200 entrées au plus) : la frise des étapes du run en a besoin
+const JOURNAL_VU = 200
 // Un run noté « en-cours » sans écriture depuis 45 min est montré « sans nouvelles » : interrompu (Échap, session tuée),
 // il reste « en-cours » jusqu'au debut-run suivant. Une étape seule (un worker) peut durer ; au-delà, mieux vaut le dire.
 export const SILENCE_MS = 45 * 60000
@@ -59,7 +61,7 @@ export function normaliser(brut) {
     if (n > 0) majeures[type] = (majeures[type] || 0) + n
   }
   return {
-    demo: false, plan: texte(brut.plan), dossier: texte(brut.dossier), maj: date(brut.maj),
+    demo: false, legende: null, plan: texte(brut.plan), dossier: texte(brut.dossier), maj: date(brut.maj),
     taches,
     runs: runs.map(runVue),
     run: dernier ? runVue(dernier) : null,
@@ -75,7 +77,7 @@ export function normaliser(brut) {
 
 /** @param {Record<string, unknown>} r @returns {RunVue} */
 const runVue = r => ({
-  numero: entier(r.numero, 0), phase: entier(r.phase, 0), mode: texte(r.mode), statut: texte(r.statut), debut: date(r.debut), fin: date(r.fin), detail: r.detail == null ? null : texte(r.detail),
+  numero: entier(r.numero, 0), phase: entier(r.phase, 0), mode: texte(r.mode), parallelisme: entier(r.parallelisme, 0), statut: texte(r.statut), debut: date(r.debut), fin: date(r.fin), detail: r.detail == null ? null : texte(r.detail),
   arbitres: (Array.isArray(r.arbitrages_appliques) ? r.arbitrages_appliques : []).filter(estObjet).map(a => texte(a.tache)).filter(Boolean),
 })
 
@@ -319,6 +321,8 @@ export function glyphe(t, active, maintenant = 0, anime = false) {
   return { t: '○', c: 'subtle' }
 }
 const ETAPES = /** @type {Record<string, string>} */ ({ worker: 'réalisation', vérification: 'vérification', évaluation: 'évaluation', correction: 'correction', fusion: 'fusion', replanification: 'replanification', suivi: 'suivi' })
+// La case de l'étape au bandeau : « vérification +9 » (« replanification », rare, la dépasse)
+const LARG_ETAPE = 15
 
 /** Ce que fait une tâche, en quelques mots. @param {TacheVue} t @param {boolean} active @param {boolean} [tranchee] */
 export function quoi(t, active, tranchee = false) {
@@ -390,17 +394,23 @@ function ligneBandeau(inst, s, maintenant, f, anime) {
   if (points) l.push(...points)
   else l.push({ t: `phase ${phase}/${s.phaseMax}`, d: true })
   if (f.barre) l.push({ t: '  ' }, ...barreClasses(inst.taches.filter(t => t.statut !== 'annulée'), classeur(inst, maintenant), f.barre, maintenant, anime))
-  l.push({ t: `  ${s.faites}/${s.total}`, b: true })
+  // Cases de largeur fixe : « 2/5 » prend la place de « 5/5 », l'étape en cours celle de la plus longue ; ce qui suit ne
+  // bouge pas quand l'étape change
+  l.push({ t: `  ${String(s.faites).padStart(String(s.total).length)}/${s.total}`, b: true })
   // Ce qui demande quelqu'un vient juste après l'avancement, avant les tâches en cours dont le texte change de longueur :
-  // les mentions ne bougent pas d'une étape à l'autre. Elles se cliquent (a : l'onglet du panneau ouvert) ; le glyphe
-  // garde la couleur.
-  if (s.relectures) l.push({ t: '  ' }, { t: '⚑ ', c: 'warning' }, { t: `${s.relectures}${f.libelles ? ' à relire' : ''}`, a: 'relire' })
-  if (s.attention.length) l.push({ t: '  ' }, { t: '⚠ ', c: 'warning', b: true }, { t: `${s.attention.length}${f.libelles ? ' à toi' : ''}`, a: 'bilan' })
+  // les mentions ne bougent pas d'une étape à l'autre. Elles se cliquent (a : la carte du panneau ouverte, k : la clé
+  // du bouton) ; le glyphe garde la couleur.
+  if (s.relectures) l.push({ t: '  ' }, { t: '⚑ ', c: 'warning' }, { t: `${s.relectures}${f.libelles ? ' à relire' : ''}`, a: 'toi', k: 'relire' })
+  if (s.attention.length) l.push({ t: '  ' }, { t: '⚠ ', c: 'warning', b: true }, { t: `${s.attention.length}${f.libelles ? ' à toi' : ''}`, a: 'toi', k: 'toi' })
   const ec = s.enCours
-  if (ec.length && f.etape) {
-    const t = /** @type {TacheVue} */ (ec[0])
-    l.push({ t: `  ◐ ${t.id} `, c: 'suggestion' }, { t: ETAPES[t.etape || ''] || String(t.etape), c: COULEUR_ETAPE[t.etape || ''] || 'subtle', b: true })
-    if (ec.length > 1) l.push({ t: ` +${ec.length - 1}`, c: 'suggestion' })
+  if (enCoursRun && f.etape) {
+    const t = ec[0], id = Math.min(8, Math.max(3, ...inst.taches.map(x => [...x.id].length)))
+    if (t) {
+      const etape = ETAPES[t.etape || ''] || String(t.etape), plus = ec.length > 1 ? ` +${ec.length - 1}` : ''
+      l.push({ t: `  ◐ ${colonne(t.id, id)} `, c: 'suggestion' }, { t: etape, c: COULEUR_ETAPE[t.etape || ''] || 'subtle', b: true })
+      if (plus) l.push({ t: plus, c: 'suggestion' })
+      l.push({ t: ' '.repeat(Math.max(0, LARG_ETAPE - [...etape].length - plus.length)) })
+    } else l.push({ t: ' '.repeat(5 + id + LARG_ETAPE) })
   } else if (ec.length) l.push({ t: `  ◐ ${ec.length}${f.libelles ? ' en cours' : ''}`, c: 'suggestion' })
   if (s.silence) l.push({ t: f.libelles ? `  sans nouvelles depuis ${duree(maintenant - /** @type {number} */ (inst.maj))}` : `  ◌ ${duree(maintenant - /** @type {number} */ (inst.maj))}`, c: 'warning' })
   else if (!enCoursRun) l.push({ t: f.run ? `  run ${run.numero} ${run.statut}` : `  ${run.statut}`, c: run.statut === 'terminé' ? 'success' : 'warning', b: true })
@@ -421,19 +431,228 @@ export function suffixe(inst, maintenant) {
   return ` · ${t.id} ${ETAPES[t.etape || ''] || t.etape} · ${pluriel(ts.length, 'tâche')} en cours…`
 }
 
+// ─── Le panneau : une vue en cartes ──────────────────────────────────────────────────────────────────────────────
+// Dans l'ordre : ce qui t'attend (s'il y a quelque chose), le run, les tâches en frise, le journal. Dans le panneau, t, r,
+// b et j font défiler jusqu'à une carte ; 1 à 9 agissent sur les lignes de « À toi », l et p sur la suite d'un run fini.
+// Une action ne fait que préparer un texte dans le prompt : rien n'est envoyé sans la personne.
+
+const MODES = /** @type {Record<string, string>} */ ({ auto: 'autonome', devia: 'arrêt sur déviation', phase: 'arrêt par phase' })
+const ETAPE_COURTE = /** @type {Record<string, string>} */ ({ worker: 'réal', vérification: 'vérif', évaluation: 'éval', correction: 'corr', fusion: 'fusion', replanification: 'replan', suivi: 'suivi' })
+const ORDRE_ETAPES = ['worker', 'vérification', 'évaluation', 'correction', 'fusion', 'replanification', 'suivi']
+// Ce que suivi.mjs écrit au journal à chaque étape : « T01 démarre (worktree) » pour la réalisation (genre tache),
+// « T01 : vérification », « T01 : correction (essai 2) » pour les suivantes (genre etape)
+const RE_ETAPE = /^(\S+) : (vérification|évaluation|correction|fusion|replanification|suivi)(?: \(|$)/
+const RE_DEMARRE = /^(\S+) démarre \(/
+export const JOURNAL_COURT = 6
+const JOURNAL_LONG = 60
+// Le panneau perd ses bords en deçà
+const COLONNES_BORDS = 60
+
+/** Chrono : « 0:42 », « 12:05 », « 1:02:03 ». @param {number | null} ms */
+export function chrono(ms) {
+  if (ms == null || ms < 0) return '—'
+  const s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`
+}
+/** Le dossier du plan, pour les commandes proposées. @param {Instantane} inst */
+const dossierDe = inst => inst.dossier || `plans/${inst.plan}`
+/** @param {Ligne[]} parts @param {string} sep @returns {Ligne} */
+const joindre = (parts, sep) => parts.flatMap((p, i) => (i ? [{ t: sep, d: true }, ...p] : p))
+
+/** Le temps du dernier run : de son début à sa fin, ou à maintenant pendant un run actif. @param {Instantane} inst @param {number} maintenant */
+function fenetre(inst, maintenant) {
+  const r = inst.run
+  if (!r || r.debut == null) return null
+  const fin = r.fin ?? (runActif(inst, maintenant) ? maintenant : Math.max(r.debut, inst.maj ?? r.debut))
+  return { debut: r.debut, fin: Math.max(fin, r.debut + 1000) }
+}
+/** Le run où une tâche a été close. @param {Instantane} inst @param {TacheVue} t */
+const runDe = (inst, t) => (t.fin == null ? null : inst.runs.find(r => r.debut != null && /** @type {number} */ (t.fin) >= r.debut && (r.fin == null || /** @type {number} */ (t.fin) <= r.fin)) ?? null)
+
 /**
- * Onglet Tâches : une ligne par phase avec une case par tâche, le détail des tâches de la phase du run et de celles qui
- * attendent, puis les dernières nouvelles. Une tâche tout juste fusionnée reste quelques secondes, en vert.
+ * Les étapes d'une tâche pendant le dernier run, datées par le journal : chacune court jusqu'à la suivante, la dernière
+ * jusqu'à la clôture de la tâche, ou jusqu'à maintenant si elle tourne encore.
+ * @param {Instantane} inst @param {TacheVue} t @param {number} maintenant @returns {[number, number, string][]}
+ */
+export function etapesDe(inst, t, maintenant) {
+  const f = fenetre(inst, maintenant)
+  if (!f) return []
+  /** @type {{ quand: number, etape: string }[]} */
+  const reperes = []
+  for (const j of inst.journal) {
+    if (j.tache !== t.id || j.quand == null || j.quand < f.debut || j.quand > f.fin) continue
+    const m = j.genre === 'etape' ? j.texte.match(RE_ETAPE) : null
+    if (m) reperes.push({ quand: j.quand, etape: /** @type {string} */ (m[2]) })
+    else if (j.genre === 'tache' && RE_DEMARRE.test(j.texte)) reperes.push({ quand: j.quand, etape: 'worker' })
+  }
+  const close = t.fin != null && t.fin >= f.debut && t.fin <= f.fin
+  const bout = close ? /** @type {number} */ (t.fin) : runActif(inst, maintenant) && t.etape && !fait(t) ? maintenant : f.fin
+  /** @type {[number, number, string][]} */
+  const out = []
+  reperes.forEach((r, i) => {
+    const b = i + 1 < reperes.length ? /** @type {{ quand: number }} */ (reperes[i + 1]).quand : bout
+    if (b > r.quand) out.push([r.quand, b, r.etape])
+  })
+  return out
+}
+
+/** Le temps passé dans chaque étape pendant le dernier run, toutes tâches comprises. @param {Instantane} inst @param {number} maintenant @returns {[string, number][]} */
+export function tempsParEtape(inst, maintenant) {
+  const tot = /** @type {Record<string, number>} */ ({})
+  for (const t of inst.taches) for (const [a, b, e] of etapesDe(inst, t, maintenant)) tot[e] = (tot[e] || 0) + (b - a)
+  return ORDRE_ETAPES.filter(e => tot[e]).map(e => [e, /** @type {number} */ (tot[e])])
+}
+
+/**
+ * La frise d'une tâche sur le temps du dernier run : une case par tranche de temps, coloriée par étape ; le reste en
+ * pointillés. La tête d'une tâche en cours pulse quand `anime`.
+ * @param {Instantane} inst @param {TacheVue} t @param {number} maintenant @param {number} W @param {boolean} anime @returns {Ligne}
+ */
+function frise(inst, t, maintenant, W, anime) {
+  const f = fenetre(inst, maintenant)
+  /** @type {(string | null)[]} */
+  const cells = Array(W).fill(null)
+  if (f) {
+    const x = /** @param {number} q */ q => ((q - f.debut) / (f.fin - f.debut)) * W
+    for (const [a, b, e] of etapesDe(inst, t, maintenant)) {
+      const i0 = Math.min(W - 1, Math.max(0, Math.floor(x(a)))), i1 = Math.min(W - 1, Math.max(i0, Math.ceil(x(b)) - 1))
+      for (let i = i0; i <= i1; i++) cells[i] = e
+    }
+  }
+  const tete = anime && !!runActif(inst, maintenant) && !!t.etape && !fait(t) && pouls(maintenant) ? cells.findLastIndex(c => c != null) : -1
+  /** @type {Ligne} */
+  const l = []
+  cells.forEach((e, i) => {
+    const m = e == null ? { t: '·', c: 'subtle' } : { t: i === tete ? '╸' : '━', c: COULEUR_ETAPE[e] || 'subtle' }
+    const der = l[l.length - 1]
+    if (der && der.c === m.c && !(i === tete || i === tete + 1)) der.t += m.t
+    else l.push(m)
+  })
+  return l
+}
+
+/** Les phases en frise : ● faite, ◉ en cours, ○ à venir, reliées par des traits. @param {PhaseVue[]} phases @param {number | null} cur @param {number} w @returns {Ligne} */
+function frisePhases(phases, cur, w) {
+  const pts = pointsPhases(phases, cur)
+  if (!pts) return [{ t: `phase ${cur ?? '—'}/${phases.length}`, b: true }]
+  const n = pts.length, k = n > 1 ? Math.max(1, Math.floor((w - n) / (n - 1))) : 0
+  /** @type {Ligne} */
+  const l = []
+  phases.forEach((p, i) => {
+    l.push(/** @type {Morceau} */ (pts[i]))
+    if (i < n - 1) l.push({ t: '━'.repeat(k), c: p.total && p.faites === p.total ? 'success' : p.numero === cur ? 'claude' : 'subtle' })
+  })
+  return l
+}
+
+/**
+ * Ce qui t'attend, une ligne par chose, chacune avec son action : les tâches qui attendent un humain, bloquées ou en échec,
+ * les points à trancher, les prérequis ouverts, plan-lint en erreur, puis les relectures et les décisions d'office à revoir
+ * avant la PR. Les 9 premières ont une touche (1 à 9). null s'il n'y a rien.
+ * @param {Instantane} inst @param {number} maintenant @param {number} colonnes
+ * @returns {(Carte & { urgent: number }) | null}
+ */
+export function carteAToi(inst, maintenant, colonnes) {
+  const s = resumer(inst, maintenant), dossier = dossierDe(inst), reprendre = `/orchestre:lancer ${dossier} --reprendre`
+  /** @type {{ g: Morceau, texte: string, detail?: string, prompt: string, aide: string }[]} */
+  const items = []
+  const vus = new Set()
+  for (const t of s.attention) {
+    const p = inst.points.find(x => x.tache === t.id)
+    if (p) vus.add(p)
+    const raison = /** @type {Record<string, string>} */ (ATTENTION)[t.statut]
+    items.push(p || t.statut === 'besoin-humain'
+      ? { g: { t: '⚑', c: 'warning', b: true }, texte: `${t.id} · ${p ? p.titre : raison}${p?.humain ? ' (humain)' : ''}`, detail: t.blocage[0], prompt: reprendre, aide: 'reprendre le run' }
+      : { g: { t: '✗', c: 'error', b: true }, texte: `${t.id} · ${raison}`, detail: t.blocage[0], prompt: `Explique le blocage de ${t.id}${t.blocage[0] ? ` (${t.blocage[0]})` : ''} et propose une suite.`, aide: 'demander au pilote' })
+  }
+  for (const p of inst.points) if (!vus.has(p)) items.push({ g: { t: '?', c: 'warning', b: true }, texte: `${p.tache} · ${p.titre}${p.humain ? ' (humain)' : ''}`, prompt: reprendre, aide: 'trancher au lancement' })
+  for (const p of inst.prerequis) items.push({ g: { t: '◇', c: 'warning', b: true }, texte: `${p.id} (${p.type}) ouvert${p.bloque.length ? `, bloque ${p.bloque.slice(0, 4).join(', ')}` : ''}`, prompt: `/orchestre:pret ${dossier}`, aide: 'régler les prérequis' })
+  if (!inst.lint.ok) items.push({ g: { t: '✗', c: 'error', b: true }, texte: `plan-lint : ${pluriel(inst.lint.erreurs, 'erreur')} au dernier suivi`, prompt: `Montre-moi les erreurs de plan-lint sur ${dossier} et propose une correction.`, aide: 'demander au pilote' })
+  const urgent = items.length
+  for (const r of inst.relectures) items.push({ g: { t: '⚑', c: 'warning' }, texte: `${r.tache ?? 'plan source'} · ${r.texte}`, prompt: `Relis avec moi, avant la PR (relecture de ${r.tache ?? 'plan source'}) : ${r.texte}`, aide: 'relire' })
+  for (const d of inst.decisions) items.push({ g: { t: '⇒', c: 'merged' }, texte: `${d.tache} · ${d.titre} : ${d.option}${d.description ? ` (${d.description})` : ''}`, prompt: `Revois avec moi la décision prise d'office pour ${d.tache} : « ${d.titre} », option ${d.option}${d.description ? ` (${d.description})` : ''}.`, aide: 'revoir' })
+  if (!items.length) return null
+  const inner = colonnes - 4
+  /** @type {Ligne[]} */
+  const lignes = []
+  items.forEach((it, i) => {
+    const touche = i < 9 ? String(i + 1) : null
+    const aide = `  → ${it.aide}`
+    lignes.push([it.g, { t: ' ' }, { t: court(it.texte, Math.max(16, inner - aide.length - 6)), x: { touche, prompt: it.prompt, aide: it.aide } }, { t: aide, d: true }])
+    if (it.detail) lignes.push([{ t: `     ${court(it.detail, Math.max(16, inner - 6))}`, d: true }])
+  })
+  const compte = [
+    urgent ? `${urgent} à régler` : '',
+    inst.relectures.length ? pluriel(inst.relectures.length, 'relecture') : '',
+    inst.decisions.length ? pluriel(inst.decisions.length, 'décision') : '',
+  ].filter(Boolean).join(' · ')
+  return {
+    id: 'toi', couleur: 'warning', urgent,
+    titre: [{ t: urgent ? '⚠ À toi' : '⚑ À relire avant la PR', c: 'warning', b: true }],
+    meta: [{ t: compte, d: true }],
+    lignes,
+  }
+}
+
+/**
+ * Le dernier run : phases en frise, barre par statut avec ses comptes, durée, temps par étape, et la suite quand il est
+ * fini (reprendre, ou le brouillon de PR quand le plan est terminé).
+ * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @param {boolean} anime @returns {Carte}
+ */
+export function carteRun(inst, maintenant, colonnes, anime) {
+  const s = resumer(inst, maintenant), r = inst.run, inner = colonnes - 4, dossier = dossierDe(inst)
+  if (!r) return { id: 'run', couleur: 'subtle', titre: [{ t: 'Aucun run noté', b: true }], meta: [], lignes: [[{ t: `Le premier /orchestre:lancer ${dossier} l'ouvrira.`, d: true }]] }
+  const cur = phaseDuRun(inst), enCoursRun = r.statut === 'en-cours'
+  const couleur = enCoursRun ? (s.silence ? 'warning' : 'claude') : r.statut === 'terminé' ? 'success' : r.statut === 'erreur' ? 'error' : 'warning'
+  const actives = inst.taches.filter(t => t.statut !== 'annulée'), classe = classeur(inst, maintenant)
+  const n = [0, 0, 0, 0, 0]
+  for (const t of actives) { const i = classe(t); n[i] = (n[i] ?? 0) + 1 }
+  const dans = /** @param {{ quand: number | null }} j */ j => j.quand != null && r.debut != null && j.quand >= r.debut && (r.fin == null || j.quand <= r.fin)
+  // Les essais de plus des tâches démarrées dans ce run (un refus d'évaluation ou de vérification en vaut un)
+  const relances = inst.taches.filter(t => t.debut != null && r.debut != null && t.debut >= r.debut).reduce((k, t) => k + Math.max(0, t.essais - 1), 0)
+  const office = inst.journal.filter(j => j.genre === 'decision-office' && dans(j)).length
+  /** @type {Ligne[]} */
+  const lignes = [
+    [{ t: 'phases  ', d: true }, ...frisePhases(s.phases, cur, Math.max(8, Math.min(40, inner - 24))), ...(s.phases.length <= 10 ? [{ t: `   phase ${cur}/${s.phaseMax}`, d: true }] : [])],
+    [{ t: 'tâches  ', d: true }, ...barreClasses(actives, classe, Math.max(8, Math.min(30, inner - 36)), maintenant, anime), { t: `  ${s.faites}/${s.total}`, b: true },
+      ...n.flatMap((k, i) => (k ? [{ t: '   ■', c: /** @type {typeof CLASSES[number]} */ (CLASSES[i]).c }, { t: ` ${k}` }] : []))],
+    [{ t: 'durée   ', d: true }, { t: duree(s.duree) }, ...(r.parallelisme ? [{ t: ` · ${r.parallelisme} en parallèle`, d: true }] : []), ...(relances ? [{ t: ' · ', d: true }, { t: `${relances} ${relances > 1 ? 'essais' : 'essai'} de plus` }] : []), ...(office ? [{ t: ' · ', d: true }, { t: `${pluriel(office, 'décision')} d'office` }] : [])],
+  ]
+  const etapes = tempsParEtape(inst, maintenant)
+  if (etapes.length) lignes.push([{ t: 'étapes  ', d: true }, ...joindre(etapes.map(([e, ms]) => [{ t: `${ETAPE_COURTE[e] || e} ${chrono(ms)}`, c: COULEUR_ETAPE[e] || 'subtle' }]), ' · ')])
+  if (!enCoursRun && r.detail) lignes.push([{ t: 'détail  ', d: true }, { t: court(r.detail, Math.max(16, inner - 10)) }])
+  if (!enCoursRun) {
+    lignes.push(s.termine
+      ? [{ t: 'suite   ', d: true }, { t: 'Brouillon de PR dans le prompt', x: { touche: 'p', prompt: textePR(inst, maintenant), aide: 'préparer la PR' } }]
+      : [{ t: 'suite   ', d: true }, { t: `/orchestre:lancer ${dossier} --reprendre`, x: { touche: 'l', prompt: `/orchestre:lancer ${dossier} --reprendre`, aide: 'reprendre le run' } }, { t: '  dans le prompt', d: true }])
+  }
+  const marqueur = enCoursRun ? '' : r.statut === 'terminé' ? '✓ ' : r.statut === 'erreur' ? '✗ ' : '■ '
+  return {
+    id: 'run', couleur,
+    titre: [{ t: `${marqueur}Run ${r.numero} · ${libellePhases(r.phase, cur ?? r.phase)} · ${MODES[r.mode] || r.mode}`, c: couleur, b: true }],
+    meta: enCoursRun
+      ? (s.silence ? [{ t: `◌ sans nouvelles depuis ${duree(maintenant - /** @type {number} */ (inst.maj))}`, c: 'warning' }] : [{ t: `◐ ${s.enCours.length} en cours`, c: 'suggestion' }])
+      : [{ t: r.statut, c: couleur, b: true }],
+    lignes,
+  }
+}
+
+/**
+ * Les tâches : une ligne par phase (une case par tâche), puis, sous les phases où il se passe quelque chose, une ligne
+ * par tâche avec sa frise sur le temps du dernier run, sa durée et ce qu'elle fait. Une tâche close dans un run
+ * précédent garde une ligne courte ; les tâches à faire de la phase en cours sont bornées à 6.
  * @param {Instantane} inst @param {number} maintenant @param {number} colonnes @param {boolean} [anime] @returns {Ligne[]}
  */
 export function lignesTaches(inst, maintenant, colonnes, anime = false) {
-  const s = resumer(inst, maintenant), actif = !!s.run
+  const s = resumer(inst, maintenant), actif = !!s.run, f = fenetre(inst, maintenant)
   const cur = actif ? phaseDuRun(inst) : s.courante?.numero ?? null
   const classe = classeur(inst, maintenant)
-  const larg = Math.max(12, Math.min(40, colonnes - 40))
+  const larg = Math.max(10, Math.min(22, colonnes - 60)), W = Math.max(8, Math.min(26, colonnes - larg - 42))
+  const touchee = /** @param {TacheVue} t */ t => !!f && ((t.debut != null && t.debut >= f.debut) || (t.fin != null && t.fin >= f.debut) || (actif && !!t.etape))
   const vient = /** @param {TacheVue} t */ t => fait(t) && t.fin != null && maintenant - t.fin < NOUVELLE_MS / 2
   /** @type {Ligne[]} */
   const out = []
+  let segments = false
   for (const p of s.phases) {
     const finie = p.total > 0 && p.faites === p.total
     const g = finie ? { t: '●', c: 'success' } : p.attention ? { t: '⚠', c: 'warning' } : p.numero === cur ? { t: '◉', c: 'claude', b: true } : p.faites ? { t: '◐', c: 'suggestion' } : { t: '○', c: 'subtle' }
@@ -444,79 +663,135 @@ export function lignesTaches(inst, maintenant, colonnes, anime = false) {
     l.push({ t: `  ${p.faites}/${p.total}`, c: finie ? 'success' : undefined, b: finie }, { t: `  ${duree(p.duree)}`, d: true })
     if (p.relances.length) l.push({ t: `   ${p.relances.slice(0, 3).map(r => `${r.id} ×${r.essais}`).join(', ')}${p.relances.length > 3 ? '…' : ''}`, c: 'merged' })
     out.push(l)
-    if (!(p.numero === cur || p.attention > 0 || p.enCours > 0 || ts.some(vient))) continue
-    for (const t of ts.filter(vient)) out.push([{ t: '    ' }, { t: '●', c: 'success', b: true }, { t: ` ${colonne(t.id, 6)} `, c: 'success', b: true }, { t: `${colonne(t.titre, larg)} `, c: 'success' }, { t: ' fusionnée ', c: 'inverseText', f: 'success', b: true }])
-    const restent = ts.filter(t => !fait(t))
-    const aFaire = restent.filter(t => !(t.statut in ATTENTION) && !(actif && t.etape))
-    for (const t of restent.filter(t => (t.statut in ATTENTION) || (actif && t.etape))) {
-      const enMarche = actif && !!t.etape
-      out.push([{ t: '    ' }, glyphe(t, actif, maintenant, anime), { t: ` ${colonne(t.id, 6)} `, b: enMarche }, { t: `${colonne(t.titre, larg)} `, d: !enMarche }, ...quoiColore(t, actif, arbitree(inst, t), Math.max(10, colonnes - larg - 24)), { t: t.debut != null && enMarche ? `  ${duree(maintenant - t.debut)}` : '', d: true }])
+    const detail = ts.filter(t => touchee(t) || t.statut in ATTENTION)
+    const aFaire = p.numero === cur ? ts.filter(t => !fait(t) && !detail.includes(t)) : []
+    for (const t of detail) {
+      const segs = etapesDe(inst, t, maintenant)
+      if (segs.length) segments = true
+      const enMarche = actif && !!t.etape && !fait(t)
+      const avant = !segs.length && fait(t) ? runDe(inst, t) : null
+      const temps = segs.length ? /** @type {[number, number, string]} */ (segs.at(-1))[1] - /** @type {[number, number, string]} */ (segs[0])[0] : t.debut != null && t.fin != null ? t.fin - t.debut : null
+      /** @type {Ligne} */
+      const ligne = [{ t: '  ' }, glyphe(t, actif, maintenant, anime), { t: ` ${colonne(t.id, 6)}`, b: true }, { t: `${colonne(t.titre, larg)} `, d: !enMarche && !fait(t) }]
+      if (segs.length) ligne.push(...frise(inst, t, maintenant, W, anime))
+      else if (avant) ligne.push({ t: `── run ${avant.numero} `.padEnd(W, '─').slice(0, W), c: 'subtle' })
+      else ligne.push({ t: '·'.repeat(W), c: 'subtle' })
+      ligne.push({ t: `  ${chrono(temps).padStart(7)}  `, d: true })
+      if (vient(t)) ligne.push({ t: ' fusionnée ', c: 'inverseText', f: 'success', b: true })
+      else ligne.push(...quoiColore(t, actif, arbitree(inst, t), Math.max(10, colonnes - larg - W - 22)))
+      out.push(ligne)
     }
-    for (const t of aFaire.slice(0, 6)) out.push([{ t: '    ' }, glyphe(t, actif), { t: ` ${colonne(t.id, 6)} ${colonne(t.titre, larg)} `, d: true }, { t: court(quoi(t, actif), Math.max(10, colonnes - larg - 14)), d: true }])
+    for (const t of aFaire.slice(0, 6)) out.push([{ t: '  ' }, glyphe(t, actif), { t: ` ${colonne(t.id, 6)}${colonne(t.titre, larg)} `, d: true }, { t: '·'.repeat(W), c: 'subtle' }, { t: `  ${court(quoi(t, actif), Math.max(10, colonnes - larg - W - 14))}`, d: true }])
     if (aFaire.length > 6) out.push([{ t: `    ○ ${aFaire.length - 6} autres à faire`, d: true }])
   }
   if (!out.length) return [[{ t: 'Aucune tâche dans suivi.json.', d: true }]]
-  const derniers = inst.journal.filter(j => j.genre !== 'etape').slice(-3)
-  if (derniers.length) {
-    out.push([], [{ t: 'Dernières nouvelles', d: true }])
-    for (const j of derniers) {
-      const vive = j.quand != null && maintenant - j.quand < 4000
-      out.push([{ t: '  ' }, marque(j), { t: ` ${court(enBref(j), Math.max(20, colonnes - 16))}`, b: vive, d: !vive }, { t: `  ${age(j.quand, maintenant)}`, d: true }])
+  if (segments) out.push([{ t: ' '.repeat(10 + larg) }, ...joindre(ORDRE_ETAPES.slice(0, 5).map(e => [{ t: '━', c: COULEUR_ETAPE[e] }, { t: ` ${ETAPE_COURTE[e]}`, d: true }]), ' ')])
+  return out
+}
+
+/** Le journal en colonnes : âge, source colorée, message ; les dernières entrées, ou tout avec `complet`. @param {Instantane} inst @param {number} maintenant @param {number} colonnes @param {boolean} complet @returns {Carte} */
+export function carteJournal(inst, maintenant, colonnes, complet) {
+  const inner = colonnes - 4
+  const js = inst.journal.slice(-(complet ? JOURNAL_LONG : JOURNAL_COURT))
+  const lignes = js.length
+    ? js.map(j => { const m = marque(j); return [{ t: age(j.quand, maintenant).padStart(6), d: true }, { t: '  ' }, { t: colonne(j.tache ?? (j.genre === 'run' || j.genre === 'erreur' ? 'run' : 'plan'), 6), c: m.c, d: m.d, b: !m.d }, m, { t: ` ${court(j.texte, Math.max(16, inner - 18))}` }] })
+    : [[{ t: 'Journal vide.', d: true }]]
+  const reste = inst.journal.length - js.length
+  return { id: 'journal', couleur: 'subtle', titre: [{ t: 'journal', b: true }], meta: [{ t: complet ? 'j : moins' : reste > 0 ? `j : tout (${inst.journal.length})` : '', d: true }], lignes }
+}
+
+/**
+ * Ce qui a changé depuis `t0` (ton dernier passage), d'après le journal : tâches fusionnées, tâches qui se sont mises à
+ * t'attendre, fins de run, relectures. null s'il ne s'est rien passé, ou s'il y a moins d'une minute.
+ * @param {Instantane} inst @param {number | null} t0 @param {number} maintenant @returns {Ligne | null}
+ */
+export function depuis(inst, t0, maintenant) {
+  if (t0 == null || maintenant - t0 < 60000) return null
+  const att = new Set(resumer(inst, maintenant).attention.map(t => t.id))
+  /** @type {string[]} */
+  const fusions = []
+  /** @type {string[]} */
+  const attend = []
+  /** @type {string[]} */
+  const runs = []
+  let relectures = 0
+  for (const j of inst.journal) {
+    if (j.quand == null || j.quand <= t0) continue
+    /** @type {RegExpMatchArray | null} */
+    let m
+    if (j.genre === 'statut' && (m = j.texte.match(/^(\S+) : (fusionnée|besoin-humain|bloquée|échec)/))) {
+      if (m[2] === 'fusionnée') fusions.push(/** @type {string} */ (m[1]))
+      else if (att.has(/** @type {string} */ (m[1])) && !attend.includes(/** @type {string} */ (m[1]))) attend.push(/** @type {string} */ (m[1]))
     }
+    if ((j.genre === 'run' || j.genre === 'erreur') && (m = j.texte.match(/^run (\d+) : (terminé|arbitrage|partiel|à-relancer|erreur)/))) runs.push(`run ${m[1]} ${m[2]}`)
+    if (j.genre === 'relecture') relectures++
   }
-  return out
-}
-
-/** Onglet À relire. @param {Instantane} inst @param {number} maintenant @param {number} colonnes @returns {Ligne[]} */
-export function lignesRelire(inst, maintenant, colonnes) {
-  if (!inst.relectures.length) return [[{ t: 'Rien à relire pour l\'instant.', d: true }]]
   /** @type {Ligne[]} */
-  const out = [[{ t: `À relire avant la PR : ${inst.relectures.length}. Le run continue ; rien n'est autorisé d'ici.`, d: true }]]
-  for (const r of inst.relectures) {
-    const titre = r.tache ? inst.taches.find(t => t.id === r.tache)?.titre ?? '' : 'plan source'
-    out.push([{ t: `⚑ ${r.tache ?? '—'}`, c: 'warning' }, { t: `  ${court(titre, Math.max(10, colonnes - 30))}` }, { t: `${r.phase != null ? ` · phase ${r.phase}` : ''}${r.quand != null ? ` · il y a ${age(r.quand, maintenant)}` : ''}`, d: true }])
-    out.push([{ t: `    ${court(r.texte, Math.max(20, colonnes - 6))}`, d: true }])
-  }
-  return out
+  const parts = []
+  if (fusions.length) parts.push([{ t: `✓ ${fusions.slice(0, 6).join(' ')}${fusions.length > 6 ? '…' : ''} ${fusions.length > 1 ? 'fusionnées' : 'fusionnée'}`, c: 'success' }])
+  if (attend.length) parts.push([{ t: `⚠ ${attend.slice(0, 4).join(' ')} ${attend.length > 1 ? "t'attendent" : "t'attend"}`, c: 'warning', b: true }])
+  if (relectures) parts.push([{ t: `⚑ ${pluriel(relectures, 'relecture')}`, c: 'warning' }])
+  if (runs.length) parts.push([{ t: /** @type {string} */ (runs.at(-1)) }])
+  if (!parts.length) return null
+  return [{ t: '↩ ', c: 'claude', b: true }, { t: `Depuis ${duree(maintenant - t0)}`, b: true }, { t: ' : ' }, ...joindre(parts, ' · ')]
 }
 
-/** Onglet Journal : les derniers événements, les plus récents en bas, avec leur âge. @param {Instantane} inst @param {number} maintenant @param {number} colonnes @returns {Ligne[]} */
-export function lignesJournal(inst, maintenant, colonnes) {
-  if (!inst.journal.length) return [[{ t: 'Journal vide.', d: true }]]
-  return inst.journal.map(j => [{ t: `${age(j.quand, maintenant).padStart(7)}  `, d: true }, marque(j), { t: ` ${court(j.texte, Math.max(20, colonnes - 12))}` }])
+/**
+ * Le panneau entier : un en-tête (état global, légende, légende de la démo, ce qui a changé depuis le dernier passage),
+ * puis les cartes. Sous COLONNES_BORDS colonnes, les cartes perdent leur bord.
+ * @param {Instantane} inst @param {number} maintenant @param {number} colonnes
+ * @param {{ anime?: boolean, journalComplet?: boolean, depuis?: number | null }} [options]
+ * @returns {{ entete: Ligne[], cartes: Carte[], bords: boolean }}
+ */
+export function panneau(inst, maintenant, colonnes, { anime = false, journalComplet = false, depuis: t0 = null } = {}) {
+  const s = resumer(inst, maintenant), r = inst.run
+  const toi = carteAToi(inst, maintenant, colonnes)
+  /** @type {Morceau} */
+  const etat = !r ? { t: 'AUCUN RUN', d: true }
+    : s.termine && r.statut !== 'en-cours' ? { t: 'PLAN TERMINÉ', c: 'success', b: true }
+    : s.silence ? { t: `RUN ${r.numero} SANS NOUVELLES`, c: 'warning', b: true }
+    : { t: `RUN ${r.numero} ${r.statut === 'en-cours' ? 'EN COURS' : r.statut.toUpperCase()}`, c: r.statut === 'en-cours' ? 'claude' : r.statut === 'terminé' ? 'success' : r.statut === 'erreur' ? 'error' : 'warning', b: true }
+  /** @type {Morceau | null} */
+  const fin = toi && toi.urgent ? { t: ` ⚠ ${toi.urgent} À TOI `, c: 'inverseText', f: 'warning', b: true }
+    : s.relectures ? { t: `⚑ ${s.relectures} À RELIRE`, c: 'warning', b: true }
+    : s.enCours.length ? { t: `◐ ${s.enCours.length} EN COURS`, c: 'suggestion' } : null
+  /** @type {Ligne[]} */
+  const entete = [
+    [...(inst.demo ? [{ t: ' DÉMO ', c: 'inverseText', f: 'merged', b: true }, { t: ' ' }] : []), { t: 'ORCHESTRE', c: 'claude', b: true }, { t: ' · ', d: true }, { t: court(inst.plan.toUpperCase(), 30), b: true }, { t: ' · ', d: true }, etat, ...(fin ? [{ t: ' · ', d: true }, fin] : [])],
+    [{ t: '■', c: 'success' }, { t: ' fusionnée  ', d: true }, { t: '■', c: 'suggestion' }, { t: ' en cours  ', d: true }, { t: '■', c: 'warning' }, { t: ' attend  ', d: true }, { t: '■', c: 'error' }, { t: ' bloquée  ', d: true }, { t: '░', c: 'subtle' }, { t: ' à faire', d: true }],
+  ]
+  // La légende de la démo : le pas, puis ce qu'il y a à essayer
+  if (inst.legende) for (const [i, ligne] of inst.legende.split('\n').entries()) entete.push([{ t: court(ligne, Math.max(20, colonnes - 2)), c: 'merged', b: i === 0 }])
+  const absent = depuis(inst, t0, maintenant)
+  if (absent) entete.push(absent)
+  /** @type {Carte[]} */
+  const cartes = []
+  if (toi) cartes.push(toi)
+  cartes.push(carteRun(inst, maintenant, colonnes, anime))
+  cartes.push({ id: 'taches', couleur: null, titre: [{ t: 'tâches', b: true }, { t: ` · ${s.enCours.length} en cours · ${s.total} au total`, d: true }], meta: [], lignes: lignesTaches(inst, maintenant, colonnes, anime) })
+  cartes.push(carteJournal(inst, maintenant, colonnes, journalComplet))
+  return { entete, cartes, bords: colonnes >= COLONNES_BORDS }
 }
 
-/** Onglet Bilan : phases, relectures, décisions d'office, ce qui attend. @param {Instantane} inst @param {number} maintenant @returns {Ligne[]} */
-export function lignesBilan(inst, maintenant) {
+/** La ligne d'état quand le bandeau est masqué et qu'il reste quelque chose à faire : « orchestre ✓ 5/5 · ⚑ 3 ». @param {Instantane} inst @param {number} maintenant */
+export function ligneEtat(inst, maintenant) {
   const s = resumer(inst, maintenant)
-  /** @type {Ligne[]} */
-  const out = [[{ t: s.termine ? `✓ ${inst.plan} terminé` : `${inst.plan} : ${s.faites}/${s.total} tâches fusionnées`, c: s.termine ? 'success' : 'claude', b: true }, { t: `   ${pluriel(inst.runs.length, 'run')}`, d: true }]]
-  out.push([{ t: '  Phase  Tâches    Durée  Essais', d: true }])
-  const classe = classeur(inst, maintenant)
-  for (const p of s.phases) {
-    const ts = inst.taches.filter(t => t.phase === p.numero && t.statut !== 'annulée')
-    out.push([{ t: `  ${String(p.numero).padStart(5)}  ` }, { t: `${p.faites}/${p.total}`.padStart(6), c: p.faites === p.total ? 'success' : undefined }, { t: `  ${duree(p.duree).padStart(7)}  ${String(p.essais).padStart(6)}   ` }, ...(ts.length <= 30 ? cases(ts, classe) : barreClasses(ts, classe, 20, maintenant, false)), { t: p.relances.length ? `   ${p.relances.slice(0, 4).map(r => `${r.id} ×${r.essais}`).join(', ')}${p.relances.length > 4 ? '…' : ''}` : '', c: 'merged' }])
-  }
-  out.push([])
-  out.push([{ t: `⚑ ${pluriel(s.relectures, 'relecture')} avant la PR`, c: s.relectures ? 'warning' : 'subtle' }, { t: s.relectures ? `   ${[...new Set(inst.relectures.map(r => r.tache ?? 'plan source'))].slice(0, 8).join(', ')}` : '', d: true }])
-  out.push([{ t: `⇒ ${pluriel(inst.decisions.length, 'décision')} prise${inst.decisions.length > 1 ? 's' : ''} d'office`, c: inst.decisions.length ? 'warning' : 'subtle' }, { t: inst.decisions.length ? `   ${inst.decisions.slice(0, 6).map(d => d.tache).join(', ')}` : '', d: true }])
-  const maj = Object.entries(inst.majeures).sort((a, b) => b[1] - a[1])
-  out.push([{ t: `≠ ${pluriel(maj.reduce((n, [, k]) => n + k, 0), 'entrée')} majeure${maj.reduce((n, [, k]) => n + k, 0) > 1 ? 's' : ''} dans HANDOFF.md`, c: maj.length ? 'merged' : 'subtle' }, { t: maj.length ? `   ${maj.map(([type, k]) => `${type} ${k}`).join(', ')}` : '', d: true }])
-  if (inst.tickets) out.push([{ t: `☐ ${pluriel(inst.tickets, 'ticket')} à ouvrir après la PR`, c: 'subtle' }])
-  for (const t of s.attention) out.push([{ t: `⚠ ${t.id} ${ATTENTION[/** @type {keyof typeof ATTENTION} */ (t.statut)]}`, c: 'warning' }, { t: t.blocage[0] ? ` : ${court(t.blocage[0], 80)}` : '', d: true }])
-  for (const p of inst.prerequis) out.push([{ t: `⚠ ${p.id} (${p.type}) ouvert`, c: 'warning' }, { t: p.bloque.length ? `, bloque ${p.bloque.slice(0, 5).join(', ')}` : '', d: true }])
-  for (const p of inst.points) out.push([{ t: `? ${p.tache} : ${court(p.titre, 80)}`, c: 'warning' }, { t: p.humain ? ' (humain)' : '', d: true }])
-  if (!inst.lint.ok) out.push([{ t: `✗ plan-lint : ${pluriel(inst.lint.erreurs, 'erreur')} au dernier suivi`, c: 'error' }])
-  return out
+  if (s.termine && !s.relectures && !s.attention.length) return null
+  return `orchestre ${s.termine ? '✓' : '■'} ${s.faites}/${s.total}${s.relectures ? ` · ⚑ ${s.relectures}` : ''}${s.attention.length ? ` · ⚠ ${s.attention.length}` : ''}`
 }
 
 /** Une ligne en texte brut. @param {Ligne} l */
 export const brut = l => l.map(m => m.t).join('').replace(/\s+$/, '')
 
-/** L'état en texte, là où rien ne se dessine (`/suivi texte`, panneau refusé). @param {Instantane} inst @param {number} maintenant */
+/** L'état en texte, là où rien ne se dessine (`/suivi texte`, panneau refusé) : le bandeau, puis les cartes. @param {Instantane} inst @param {number} maintenant */
 export function texteEtat(inst, maintenant) {
   const b = bandeau(inst, maintenant, 120)
-  return [b ? brut(b) : `${inst.plan} : aucun run noté dans suivi.json`, '', ...lignesTaches(inst, maintenant, 100).map(brut), '', ...lignesBilan(inst, maintenant).slice(2).map(brut).filter(Boolean)].join('\n')
+  const out = [b ? brut(b) : `${inst.plan} : aucun run noté dans suivi.json`]
+  for (const c of panneau(inst, maintenant, 104).cartes) {
+    out.push('', brut([...c.titre, ...(c.meta.length ? [{ t: '   ' }, ...c.meta] : [])]))
+    for (const l of c.lignes) out.push(brut(l))
+  }
+  return out.join('\n')
 }
 
 /** Brouillon de description de PR, mis dans le prompt, jamais envoyé. @param {Instantane} inst @param {number} maintenant */

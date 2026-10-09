@@ -102,7 +102,7 @@ const RUN2 = [
 ]
 
 let avant = null
-const bilan = () => { const i = lire(); console.log(`\n    Bilan attendu dans /suivi (touche b) :\n${M.lignesBilan(i, Date.now()).map(l => `      ${M.brut(l)}`).join('\n')}`) }
+const bilan = () => { const i = lire(); console.log(`\n    Carte du run attendue dans /suivi (touche b) :\n${M.carteRun(i, Date.now(), 100, false).lignes.map(l => `      ${M.brut(l)}`).join('\n')}`) }
 async function jouer(pas, n0) {
   for (const [i, [quoi, faire]] of pas.entries()) {
     faire()
@@ -144,7 +144,7 @@ await jouer(RUN1, 1)
 bilan()
 console.log(`
 Le run 1 s'est arrêté sur un arbitrage. Dans la session, essaie :
-  /suivi            le panneau : onglets t (Tâches), r (À relire), j (Journal), b (Bilan) ; p dans le Bilan prépare la PR ;
+  /suivi            le panneau en cartes : r (À toi), b (le run), t (les tâches), j (le journal) ; 1 à 9, l et p préparent une action dans le prompt ;
                     Échap le ferme
   /suivi texte      le même état en texte
   0                 tapé seul dans le prompt vide, puis une pause : « Masquer », au bout du bandeau, le fait disparaître

@@ -2,6 +2,43 @@
 
 Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
 
+## 0.10.0 — 09/10/2026 : refonte du suivi, une vue en cartes
+
+D'après l'artefact « Refonte du suivi Orchestre » (UI inspirée de Flightdeck) et les choix de Fabien : une vue en cartes, un bandeau sur une ligne, les pistes UX-1, UX-2, UX-3, UX-5, UX-6, UX-7, UX-8 et UX-9.
+
+- Panneau `/suivi` en cartes, à la place des quatre onglets :
+  - en tête, l'état global (« ORCHESTRE · PLAN · RUN 1 ARBITRAGE · ⚠ 1 À TOI ») et la légende des couleurs ;
+  - « À toi » d'abord, quand quelque chose t'attend, et seulement alors ;
+  - le run : phases en frise, barre par statut avec ses comptes, durée, essais de plus et décisions d'office, temps passé dans chaque étape, et la suite quand il est fini ;
+  - les tâches : une ligne par phase, et sous les phases actives une ligne par tâche avec sa frise sur le temps du run ;
+  - le journal en colonnes (âge, source colorée, message), ses 6 dernières entrées, ou tout avec j.
+  - Chaque carte a un bord arrondi de sa couleur (ambre pour « À toi », orange Claude pour un run en cours, vert pour un run fini, rouge pour une erreur), sauf sous 60 colonnes.
+  - r, b, t et j font défiler jusqu'à une carte (`$.ui.scroll`). ← et → restent à Claude Code.
+- UX-1, « À toi » devient une liste d'actions : une ligne par chose, une touche de 1 à 9, et une action selon le type, préparée dans le prompt, jamais envoyée :
+  - point à trancher ou tâche qui attend un humain : `/orchestre:lancer plans/<nom> --reprendre`, qui repose la question (le pilote fait trancher avec l'outil de question) ;
+  - tâche bloquée ou en échec sans point : « Explique le blocage de T03 (…) et propose une suite. » ;
+  - prérequis ouvert : `/orchestre:pret plans/<nom>` ; plan-lint en erreur : une demande au pilote ;
+  - relecture : « Relis avec moi, avant la PR (relecture de T01) : … » ; décision d'office : « Revois avec moi la décision prise d'office pour T02 : … ».
+- UX-2, un bandeau qui ne bouge plus : « 2/5 » prend la largeur de « 5/5 », et l'étape en cours tient dans une case fixe (celle de « vérification +9 »). « replanification », rare, la dépasse.
+- UX-3, pendant ton absence : au premier prompt après 15 min sans prompt, une notification dit ce qui a changé (« ↩ Depuis 16 min : ✓ T01 fusionnée · ⚠ T02 t'attend ») ; le panneau rouvert le dit en tête, depuis sa dernière ouverture (après une minute au moins).
+- UX-5, le temps de chaque étape : la frise de chaque tâche est coloriée par étape, datée par le journal (« T01 démarre » pour la réalisation, « T01 : vérification » pour les suivantes), et la carte du run donne le temps total par étape. Le mod lit désormais tout le journal de suivi.json (200 entrées au plus) au lieu des 40 dernières.
+- UX-6, des notifications à deux niveaux : une notification seulement pour une tâche qui attend un humain, bloquée ou en échec, un run arrêté ou en erreur. Fusions, fins de phase, runs lancés ou terminés et relectures se lisent au bout du bandeau et dans le journal. `/suivi son` ajoute un son à ces notifications (macOS, `afplay` ; rien sur un terminal Linux ou Windows), coupé par défaut, gardé d'une session à l'autre ($.store).
+- UX-7, la suite en une touche : un run fini propose `/orchestre:lancer plans/<nom> --reprendre` (touche l), un plan terminé le brouillon de PR (touche p).
+- UX-8, une trace quand le bandeau est masqué : après « Masquer », la ligne d'état garde « orchestre ✓ 5/5 · ⚑ 3 » tant qu'il reste une relecture ou une tâche qui attend.
+- UX-9, une démo commentée : l'en-tête du panneau donne le pas (« pas 11/21 · T03 attend un humain ») et, à certains pas, le geste à essayer. Dans la démo, une touche d'action dit ce qu'elle préparerait, sans rien mettre dans le prompt.
+- Tests : 19 cas du modèle et 15 tests sous le moteur ; 106 des 108 mutations du modèle, de la démo et des hooks sont détectées, les 2 autres ne changent que le défilement vers une carte. Le kit de test n'a pas la mise en page du moteur : le défilement vers une carte (`$.ui.scroll`) n'y est pas vérifié, ni le style de survol.
+
+### Mettre à jour depuis la 0.9.1
+
+1. Entre deux runs : `/plugin marketplace update circle`, puis `/reload-plugins`.
+2. `/suivi demo`, puis `/suivi` pendant la démo, pour voir les cartes et essayer les touches.
+
+### Pas encore vérifié en réel
+
+- Le rendu des cartes dans le terminal du Mac (bords, largeurs, frise) et le défilement vers une carte, juste après l'ouverture du panneau compris (un second essai est fait 250 ms plus tard).
+- Le son sur le Mac (`afplay`).
+- Le seuil de 15 min pour « pendant ton absence » : à régler à l'usage.
+
 ## 0.9.1 — 09/10/2026 : bandeau cliquable, onglets et fin de démo
 
 Retours de Fabien sur `/suivi demo`, vue sur le Mac en 0.9.0.

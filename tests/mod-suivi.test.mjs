@@ -49,21 +49,29 @@ try {
     assert.equal(M.normaliser({ format: 'orchestre-suivi/1' }), null, 'sans taches')
   })
 
-  cas('pendant un run : bandeau, suffixe du spinner, tâches en cours dans l\'onglet Tâches', () => {
+  cas('pendant un run : bandeau, suffixe du spinner, tâches en cours et leur frise', () => {
     const b = M.brut(M.bandeau(A, tA, 140))
-    assert.match(b, /^▶ demo {2}◉○ {2}█+░+ {2}0\/4 {2}◐ T01 réalisation \+1 {2}⏱ 1 min$/)
-    assert.match(M.brut(M.bandeau(A, tA, 80)), /◐ T01 réalisation \+1 {2}⏱ 1 min$/, 'l\'étape tient en 80')
+    assert.match(b, /^▶ demo {2}◉○ {2}█+░+ {2}0\/4 {2}◐ T01 réalisation \+1 +⏱ 1 min$/)
+    assert.match(M.brut(M.bandeau(A, tA, 80)), /◐ T01 réalisation \+1 +⏱ 1 min$/, 'l\'étape tient en 80')
+    // Cases fixes : la durée reste en place quand l'étape change de nom, « 0/10 » prend la largeur de « 10/10 »
+    const fusion = { ...A, taches: A.taches.map(t => (t.id === 'T01' ? { ...t, etape: 'fusion' } : t)) }
+    assert.equal(M.brut(M.bandeau(fusion, tA, 140)).indexOf('⏱'), b.indexOf('⏱'), 'la durée ne bouge pas')
+    const dix = { ...A, taches: [...A.taches, ...Array.from({ length: 6 }, (_, i) => ({ ...A.taches[3], id: `T1${i}` }))] }
+    assert.match(M.brut(M.bandeau(dix, tA, 140)), / {3}0\/10 /)
     // Les mentions viennent juste après l'avancement, avant les tâches en cours : elles ne bougent pas d'une étape à l'autre
     const A2 = { ...A, relectures: [{ tache: 'T01', phase: 1, texte: '.env.example', quand: tA - 1000 }] }
     const A3 = { ...A2, taches: A2.taches.map(t => (t.id === 'T01' ? { ...t, etape: 'evaluateur' } : t)) }
-    assert.match(M.brut(M.bandeau(A2, tA, 140)), /^▶ demo {2}◉○ {2}█+░+ {2}0\/4 {2}⚑ 1 à relire {2}◐ T01 réalisation \+1 {2}⏱ 1 min$/)
+    assert.match(M.brut(M.bandeau(A2, tA, 140)), /^▶ demo {2}◉○ {2}█+░+ {2}0\/4 {2}⚑ 1 à relire {2}◐ T01 réalisation \+1 +⏱ 1 min$/)
     assert.equal(M.brut(M.bandeau(A3, tA, 140)).indexOf('⚑ 1 à relire'), M.brut(M.bandeau(A2, tA, 140)).indexOf('⚑ 1 à relire'), 'même place à l\'étape suivante')
     assert.match(M.brut(M.bandeau(A, tA, 50)), /◐ 2 en cours {2}⏱/, 'sans l\'étape')
     assert.match(M.brut(M.bandeau(A, tA, 44)), /◐ 2 {2}⏱/, 'libellés courts')
     assert.equal(M.suffixe(A, tA), ' · T01 réalisation · 2 tâches en cours…')
     const t = texte(M.lignesTaches(A, tA, 100))
-    assert.match(t, /^◉ Phase 1 +■■ {2}0\/2/m); assert.match(t, /◐ T01 +Tâche T01 +réalisation \(worktree\)/); assert.match(t, /◐ T02 .*vérification/)
+    assert.match(t, /^◉ Phase 1 +■■ {2}0\/2/m); assert.match(t, /◐ T01 +Tâche T01 .*réalisation \(worktree\)/); assert.match(t, /◐ T02 .*vérification/)
     assert.match(t, /^○ Phase 2 +■■ {2}0\/2/m); assert.doesNotMatch(t, /T03/, 'phase suivante repliée')
+    // La frise : la réalisation de T01 en lavande, la vérification de T02 en violet, sur le temps du run
+    const ligne = id => M.lignesTaches(A, tA, 100).find(l => l.some(m => m.t.trim() === id))
+    assert.ok(ligne('T01').some(m => /━/.test(m.t) && m.c === 'suggestion')); assert.ok(ligne('T02').some(m => /━/.test(m.t) && m.c === 'merged'))
   })
 
   suivi('cloture', { tache: 'T01', statut: 'fusionnée', essais: 2, branche: 'tache/T01', refus: [{ essai: 1, par: 'évaluation', manques: ['texte faux'] }], relectures: ['agents/x/.env.example : ajouter MR_MAX'], decisions_office: [{ titre: 'Seuil de relance', option: 'A', description: 'plafond à 30 s' }] })
@@ -76,16 +84,35 @@ try {
     assert.deepEqual(M.changements(B, B), [])
   })
 
-  cas('onglets À relire et Bilan, état en texte et brouillon de PR', () => {
-    const r = texte(M.lignesRelire(B, tA, 100))
-    assert.match(r, /À relire avant la PR : 3\./); assert.match(r, /⚑ T01 {2}Tâche T01 · phase 1 · il y a/); assert.match(r, /agents\/x\/\.env\.example : ajouter MR_MAX/)
-    const bi = texte(M.lignesBilan(B, tA))
-    assert.match(bi, /demo : 1\/4 tâches fusionnées/); assert.match(bi, /^ +1 +1\/2 .* 3 +■+ +T01 ×2$/m)
-    assert.match(bi, /⚑ 3 relectures avant la PR {3}T01, T02/); assert.match(bi, /⇒ 1 décision prise d'office {3}T01/); assert.match(bi, /⚠ T02 attend un humain : secret manquant/)
+  cas('carte « À toi » : une ligne par chose, une action par type ; carte du run, journal, état en texte et brouillon de PR', () => {
+    const toi = M.carteAToi(B, tA, 100)
+    assert.equal(M.brut(toi.titre), '⚠ À toi'); assert.equal(M.brut(toi.meta), '1 à régler · 3 relectures · 1 décision')
+    const tt = texte(toi.lignes)
+    assert.match(tt, /^⚑ T02 · Secret manquant \(humain\) {2}→ reprendre le run\n +secret manquant pour les tests$/m)
+    assert.match(tt, /^⚑ T01 · agents\/x\/\.env\.example : ajouter MR_MAX {2}→ relire$/m)
+    assert.match(tt, /^⇒ T01 · Seuil de relance : A \(plafond à 30 s\) {2}→ revoir$/m)
+    const actions = toi.lignes.flat().filter(m => m.x).map(m => m.x)
+    assert.deepEqual(actions.map(x => x.touche), ['1', '2', '3', '4', '5'])
+    assert.equal(actions[0].prompt, '/orchestre:lancer plans/demo --reprendre', 'un point humain : reprendre le run, qui le pose')
+    assert.equal(actions[1].prompt, 'Relis avec moi, avant la PR (relecture de T01) : agents/x/.env.example : ajouter MR_MAX')
+    assert.equal(actions[4].prompt, "Revois avec moi la décision prise d'office pour T01 : « Seuil de relance », option A (plafond à 30 s).")
+    // Bloquée sans point : on demande au pilote ; prérequis ouvert : /orchestre:pret
+    const bloquee = { ...B, points: [], taches: B.taches.map(t => (t.id === 'T02' ? { ...t, statut: 'bloquée' } : t)), prerequis: [{ id: 'D5', type: 'décision', bloque: ['T04'] }] }
+    const ab = M.carteAToi(bloquee, tA, 100).lignes.flat().filter(m => m.x).map(m => m.x.prompt)
+    assert.deepEqual(ab.slice(0, 2), ['Explique le blocage de T02 (secret manquant pour les tests) et propose une suite.', '/orchestre:pret plans/demo'])
+    assert.equal(M.carteAToi(A, tA, 100), null, 'rien à faire : pas de carte')
+    // Au-delà de 9 lignes, plus de touche : la ligne reste un bouton
+    const beaucoup = { ...B, relectures: Array.from({ length: 10 }, (_, i) => ({ tache: 'T01', phase: 1, texte: `f${i}`, quand: null })) }
+    assert.deepEqual(M.carteAToi(beaucoup, tA, 100).lignes.flat().filter(m => m.x).map(m => m.x.touche), ['1', '2', '3', '4', '5', '6', '7', '8', '9', null, null, null])
+    const run = texte(M.carteRun(B, tA, 100, false).lignes)
+    assert.match(run, /^durée .* · 2 en parallèle · 1 essai de plus · 1 décision d'office$/m); assert.match(run, /^tâches .* 1\/4 /m); assert.doesNotMatch(run, /suite/, 'run en cours : pas de suite')
     const pr = M.textePR(B, tA)
     assert.match(pr, /- T01 : agents\/x\/\.env\.example : ajouter MR_MAX/); assert.match(pr, /- T01, Seuil de relance : option A, plafond à 30 s/); assert.match(pr, /Encore en attente : T02 \(attend un humain\)/)
-    assert.match(M.texteEtat(B, tA), /^▶ demo {2}◉○/)
-    assert.match(texte(M.lignesJournal(B, tA, 100)), /⚑ /)
+    const etat = M.texteEtat(B, tA)
+    assert.match(etat, /^▶ demo {2}◉○/); assert.match(etat, /\n⚠ À toi {3}1 à régler/); assert.match(etat, /\njournal/)
+    const j = M.carteJournal(B, tA, 100, false)
+    assert.equal(j.lignes.length, M.JOURNAL_COURT); assert.match(texte(j.lignes), /⚑ /); assert.equal(M.brut(j.meta), `j : tout (${B.journal.length})`)
+    assert.equal(M.carteJournal(B, tA, 100, true).lignes.length, B.journal.length)
   })
 
   suivi('fin-run', { statut: 'arbitrage', phase: 1, mode: 'auto', arbitrage: { tache: 'T02', titre: 'Secret manquant', contexte: '', humain: true, options: [] }, points_a_trancher: [], taches: [], non_lancees: [], reportees: [], taches_ajoutees: [], arbitrages_appliques: [], decisions_office: [], amendements_ecartes: [], en_attente: ['T02'], en_attente_prerequis: [] })
@@ -96,12 +123,22 @@ try {
     assert.deepEqual(M.changements(B, C), ['Run 1 (phase 1) : arbitrage', 'Run arrêté : T02, Secret manquant'], 'point devenu point d\'arrêt')
     assert.match(M.brut(M.bandeau(C, tA, 140)), /^■ demo {2}◉○ {2}\S+ {2}1\/4 {2}⚑ 3 à relire {2}⚠ 1 à toi {2}run 1 arbitrage {2}⏱ /)
     assert.equal(M.suffixe(C, tA), null); assert.deepEqual(M.enCours(C, tA), [])
-    assert.match(texte(M.lignesBilan(C, tA)), /\? T02 : Secret manquant \(humain\)/)
+    assert.match(texte(M.carteAToi(C, tA, 100).lignes), /^⚑ T02 · Secret manquant \(humain\) {2}→ reprendre le run$/m)
+    // Run fini : la suite en une touche
+    const rc = M.carteRun(C, tA, 100, false)
+    assert.equal(M.brut(rc.titre), '■ Run 1 · phase 1 · autonome'); assert.equal(rc.couleur, 'warning')
+    const suite = rc.lignes.flat().find(m => m.x)
+    assert.deepEqual([suite.x.touche, suite.x.prompt], ['l', '/orchestre:lancer plans/demo --reprendre'])
+    assert.deepEqual(M.panneau(C, tA, 100).cartes.map(c => c.id), ['toi', 'run', 'taches', 'journal'])
+    assert.match(M.brut(M.panneau(C, tA, 100).entete[0]), /^ORCHESTRE · DEMO · RUN 1 ARBITRAGE · {2}⚠ 1 À TOI$/)
+    assert.deepEqual([M.panneau(C, tA, 100).bords, M.panneau(C, tA, 50).bords], [true, false], 'sans bord en deçà de 60 colonnes')
+    assert.deepEqual(M.panneau(A, tA, 100).cartes.map(c => c.id), ['run', 'taches', 'journal'], 'rien à faire : pas de carte À toi')
+    assert.equal(M.ligneEtat(C, tA), 'orchestre ■ 1/4 · ⚑ 3 · ⚠ 1')
   })
 
-  cas('gros plan : l\'onglet Tâches replie les phases sans activité et borne les tâches à faire', () => {
+  cas('gros plan : les tâches repliées par phase, sans activité, et les tâches à faire bornées', () => {
     const doc = JSON.parse(readFileSync(join(d, 'suivi.json'), 'utf8'))
-    doc.taches = Array.from({ length: 130 }, (_, i) => ({ ...doc.taches[0], id: `T${String(i + 1).padStart(3, '0')}`, phase: Math.floor(i / 13) + 1, statut: i < 40 ? 'fusionnée' : 'à-faire', etape: null }))
+    doc.taches = Array.from({ length: 130 }, (_, i) => ({ ...doc.taches[0], id: `T${String(i + 1).padStart(3, '0')}`, phase: Math.floor(i / 13) + 1, statut: i < 40 ? 'fusionnée' : 'à-faire', etape: null, debut: null, fin: null }))
     const G = M.normaliser(doc)
     const l = M.lignesTaches(G, tA, 100)
     assert.equal(l.filter(x => /Phase/.test(M.brut(x))).length, 10)
@@ -139,7 +176,7 @@ try {
     assert.deepEqual(M.resumer(E, tE).attention, []); assert.doesNotMatch(M.brut(M.bandeau(E, tE, 140)), /à toi/)
     assert.match(texte(M.lignesTaches(E, tE, 100)), /⚑ T02 .*point tranché, reprise à venir/)
     assert.deepEqual(M.resumer(F, tE).attention, []); assert.match(M.brut(M.bandeau(F, tE, 140)), /◐ T02 réalisation/)
-    assert.match(texte(M.lignesTaches(F, tE, 100)), /◐ T02 +Tâche T02 +réalisation \(worktree\)/)
+    assert.match(texte(M.lignesTaches(F, tE, 100)), /◐ T02 +Tâche T02 .*réalisation \(worktree\)/)
     assert.equal(M.resumer(F, tE).phases[0].attention, 0)
     // Reprise sans arbitrage dans ce run (tâche bloquée relancée, point réglé ailleurs) : l'étape suffit
     const brutF = JSON.parse(readFileSync(join(d, 'suivi.json'), 'utf8'))
@@ -165,6 +202,10 @@ try {
     assert.ok(M.changements(G2, H).includes('Run 2 (phases 1 à 2) : terminé'), M.changements(G2, H).join(' | '))
     assert.ok(M.changements(B, C).includes('Run 1 (phase 1) : arbitrage'), 'un run d\'une phase garde « phase 1 »')
     assert.notEqual(M.phasesDe(H, tE)[1].duree, null, 'la phase 2 a une durée, bien que run.phase vaille 1')
+    // Plan fini : la suite est le brouillon de PR ; la ligne d'état reste tant qu'il y a des relectures
+    const suite = M.carteRun(H, tE, 100, false).lignes.flat().find(m => m.x)
+    assert.deepEqual([suite.x.touche, suite.x.prompt], ['p', M.textePR(H, tE)])
+    assert.equal(M.ligneEtat(H, tE), 'orchestre ✓ 4/4 · ⚑ 3'); assert.equal(M.ligneEtat({ ...H, relectures: [] }, tE), null)
   })
 
   cas('bandeau : tient dans la largeur donnée, place du bouton comprise, en gardant l\'essentiel', () => {
@@ -187,9 +228,9 @@ try {
   cas('couleurs : barre par statut, une case par tâche, points de phase, pastilles', () => {
     const classes = M.bandeau(C, tA, 140).filter(m => /^[█░▓]+$/.test(m.t))
     assert.deepEqual(classes.map(m => [m.c, [...m.t].length]), [['success', 3], ['warning', 3], ['subtle', 6]], 'T01 fusionnée, T02 attend un humain, T03 et T04 à faire')
-    // « à relire » et « à toi » sont des boutons vers leur onglet ; leur glyphe garde la couleur
+    // « à relire » et « à toi » sont des boutons vers la carte « À toi » ; leur glyphe garde la couleur
     const l = M.bandeau(C, tA, 140)
-    assert.deepEqual([l.find(m => /à toi/.test(m.t))?.a, l.find(m => /à relire/.test(m.t))?.a], ['bilan', 'relire'])
+    assert.deepEqual([l.find(m => /à toi/.test(m.t)), l.find(m => /à relire/.test(m.t))].map(m => [m?.a, m?.k]), [['toi', 'toi'], ['toi', 'relire']], 'les deux mènent à la carte À toi')
     assert.deepEqual(l.filter(m => m.t === '⚠ ' || m.t === '⚑ ').map(m => [m.t, m.c, !!m.b]), [['⚑ ', 'warning', false], ['⚠ ', 'warning', true]])
     // Gros plan : en proportion, chaque statut présent garde au moins une case
     const doc = JSON.parse(readFileSync(join(d, 'suivi.json'), 'utf8'))
@@ -220,8 +261,8 @@ try {
     assert.deepEqual([M.nouvelle(C2, qC + 3000).texte, M.nouvelle(C2, qC + 3000).marque.t, M.nouvelle(C2, qC + 3000).marque.c], ['run 1 : arbitrage', '■', 'warning'])
     const qH = Math.max(...H.journal.map(j => j.quand))
     assert.deepEqual([M.nouvelle(H, qH).marque.t, M.nouvelle(H, qH).marque.c], ['✓', 'success'], 'fin de run terminée en vert')
-    const fin = M.lignesTaches(B, q + 1000, 100).slice(-4).map(M.brut).join('\n')
-    assert.match(fin, /^Dernières nouvelles\n.*\n.*\n.*T02 : point « Secret manquant »/, 'les trois dernières entrées du journal, dans l\'onglet Tâches')
+    const fin = texte(M.carteJournal(B, q + 1000, 100, false).lignes)
+    assert.match(fin, /T02 : point « Secret manquant »[^\n]*$/, 'la dernière entrée du journal en bas de sa carte')
   })
 
   cas('animation : la tête tourne, les tâches en cours pulsent et tournent ; rien ne bouge sans anime ni hors d\'un run', () => {
@@ -246,8 +287,30 @@ try {
     assert.ok(M.DUREE_IMPORTANTE_MS > 4000)
   })
 
+  cas('frise des étapes, temps par étape, ce qui a changé pendant ton absence (sur la démo)', () => {
+    const T = Date.parse('2026-10-09T10:00:00Z'), t = D.instantDuPas(11, T) + 500, I = D.instantaneDemo(11, T)
+    const etapes = id => M.etapesDe(I, I.taches.find(x => x.id === id), t).map(e => e[2])
+    assert.deepEqual([etapes('T01'), etapes('T02'), etapes('T03')], [['worker', 'vérification', 'évaluation', 'fusion'], ['worker', 'vérification', 'correction', 'vérification', 'fusion'], ['worker', 'vérification']])
+    assert.deepEqual(M.tempsParEtape(I, t).map(e => e[0]), ['worker', 'vérification', 'évaluation', 'correction', 'fusion'])
+    const T02 = M.lignesTaches(I, t, 100).find(l => l.some(m => m.t.trim() === 'T02'))
+    assert.deepEqual(T02.filter(m => /━/.test(m.t)).map(m => m.c), ['suggestion', 'merged', 'warning', 'merged', 'success'], 'une couleur par étape, dans l\'ordre')
+    const T03 = M.lignesTaches(I, t, 100).find(l => l.some(m => m.t.trim() === 'T03'))
+    assert.match(T03.filter(m => /^[━·]+$/.test(m.t)).at(-1).t, /^·+$/, 'T03 s\'arrête à sa clôture, avant la fin du run')
+    assert.match(texte(M.carteRun(I, t, 100, false).lignes), /^étapes {2}réal \d+:\d\d · vérif \d+:\d\d · éval \d+:\d\d · corr \d+:\d\d · fusion \d+:\d\d$/m)
+    const I20 = D.instantaneDemo(20, T), fin = D.instantDuPas(20, T) + 60000
+    assert.equal(M.brut(M.depuis(I20, D.instantDuPas(12, T), fin)), '↩ Depuis 1 min : ✓ T03 T05 T04 fusionnées · ⚑ 2 relectures · run 2 terminé')
+    assert.equal(M.brut(M.depuis(I, T - 1, D.instantDuPas(11, T) + 60000)), '↩ Depuis 1 min : ✓ T01 T02 fusionnées · ⚠ T03 t\'attend · ⚑ 1 relecture · run 1 arbitrage')
+    assert.equal(M.depuis(I20, D.instantDuPas(20, T) - 1000, D.instantDuPas(20, T) + 29000), null, 'moins d\'une minute, même avec du nouveau : rien')
+    assert.equal(M.depuis(I20, D.instantDuPas(20, T), fin), null, 'rien de nouveau depuis le dernier pas : rien')
+    // La légende de la démo, en tête du panneau
+    const en = M.panneau(D.instantaneDemo(10, T), D.instantDuPas(10, T), 100).entete.map(M.brut)
+    assert.ok(en.includes('pas 11/21 · T03 attend un humain'), en.join(' | ')); assert.ok(en.some(l => /^→ la carte « À toi » est en tête/.test(l)))
+    assert.equal(M.normaliser(D.docDemo(3, T)).legende, null)
+  })
+
   cas('mise en forme : durées, âges, barre, coupe', () => {
     assert.deepEqual([M.duree(45000), M.duree(18 * 60000), M.duree(72 * 60000), M.duree(null)], ['45 s', '18 min', '1 h 12', '—'])
+    assert.deepEqual([M.chrono(42000), M.chrono(725000), M.chrono(3723000), M.chrono(null)], ['0:42', '12:05', '1:02:03', '—'])
     assert.equal(M.age(0, 3 * 86400000), '3 j'); assert.equal(M.barre(1, 4, 8), '██░░░░░░'); assert.equal(M.court('abcdef', 4), 'abc…')
   })
 

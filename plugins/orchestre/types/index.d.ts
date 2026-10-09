@@ -21,6 +21,7 @@ export type RunVue = {
   numero: number
   phase: number
   mode: string
+  parallelisme: number
   statut: string
   debut: number | null
   fin: number | null
@@ -43,6 +44,8 @@ export type PhaseVue = {
 export type Instantane = {
   // Le run joué par /suivi demo, en mémoire : rien ne vient d'un suivi.json
   demo: boolean
+  // La légende du pas de la démo (« pas 11/21 · T03 attend un humain », puis, à la ligne, le geste à essayer) ; null hors démo
+  legende: string | null
   plan: string
   dossier: string
   maj: number | null
@@ -61,11 +64,19 @@ export type Instantane = {
 
 // Un morceau de ligne : texte, couleur du thème (success, error, warning, suggestion, subtle, claude, merged, planMode,
 // inverseText), gras, estompé, fond (une couleur du thème : pastilles « ⚠ à toi », « fusionnée »)
-// a : l'onglet du panneau qu'ouvre un clic sur le morceau, dessiné en bouton
-export type Morceau = { t: string; c?: string; b?: boolean; d?: boolean; f?: string; a?: Onglet }
+// a : la carte du panneau qu'ouvre un clic sur le morceau (bandeau), k la clé de son bouton ; x : l'action d'un morceau
+// du panneau. Les deux sont dessinés en bouton
+export type Morceau = { t: string; c?: string; b?: boolean; d?: boolean; f?: string; a?: Section; k?: string; x?: Action }
 export type Ligne = Morceau[]
 
-export type Onglet = 'taches' | 'relire' | 'journal' | 'bilan'
+// Une action du panneau : un texte préparé dans le prompt, jamais envoyé ; sa touche (1 à 9, l, p), son aide
+export type Action = { touche: string | null; prompt: string; aide: string }
+
+// Les cartes du panneau, dans l'ordre ; t, r, b et j y font défiler
+export type Section = 'toi' | 'run' | 'taches' | 'journal'
+
+// Une carte : titre et compteur sur la ligne du haut, bord de la couleur du thème (null : sans bord)
+export type Carte = { id: Section; couleur: string | null; titre: Ligne; meta: Ligne; lignes: Ligne[] }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -76,7 +87,8 @@ declare module 'claude-code' {
       plan: string | null
       // mtime de suivi.json à la dernière lecture : on ne relit que s'il a changé
       lu: number
-      onglet: Onglet
+      // Le journal du panneau en entier (touche j) plutôt que ses dernières entrées
+      journal: boolean
       // Numéro du run dont le bandeau de fin a été masqué
       masque: number | null
       // Format inconnu déjà signalé, pour ne le dire qu'une fois

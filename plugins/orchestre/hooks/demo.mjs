@@ -158,5 +158,22 @@ export function docDemo(k, debut, pas = PAS_DEMO_MS) {
 
 /** Ce que le mod affiche après le pas k : le document lu comme un suivi.json, marqué démo (« DÉMO » au bandeau). @param {number} k @param {number} debut @param {number} [pas] @returns {Instantane} */
 export function instantaneDemo(k, debut, pas = PAS_DEMO_MS) {
-  return { .../** @type {Instantane} */ (normaliser(docDemo(k, debut, pas))), demo: true }
+  return { .../** @type {Instantane} */ (normaliser(docDemo(k, debut, pas))), demo: true, legende: legende(k) }
+}
+
+// Ce qu'il y a à regarder ou à essayer à certains pas, dans l'en-tête du panneau
+const GESTES = /** @type {Record<number, string>} */ ({
+  0: 'clique « Détail » au bandeau, ou tape 1 dans un prompt vide',
+  1: 'la frise de chaque tâche se colorie étape par étape',
+  4: 'la correction passe en ambre dans la frise de T02',
+  6: '« ⚑ 1 à relire » se clique au bandeau',
+  10: 'la carte « À toi » est en tête ; sa touche 1 prépare la reprise dans le prompt',
+  11: 'le run s\'arrête : la carte du run donne la suite, touche l',
+  12: 'le point est tranché : T03 n\'attend plus personne',
+  20: 'touche p : le brouillon de PR dans le prompt',
+})
+/** La légende du pas k : « pas 11/21 · T03 attend un humain », puis, à la ligne, le geste à essayer. @param {number} k */
+export function legende(k) {
+  const i = Math.min(Math.max(0, k), NB_PAS - 1), geste = GESTES[i]
+  return `pas ${i + 1}/${NB_PAS} · ${/** @type {[string, number, Pas]} */ (SCENARIO[i])[0]}${geste ? `\n→ ${geste}` : ''}`
 }

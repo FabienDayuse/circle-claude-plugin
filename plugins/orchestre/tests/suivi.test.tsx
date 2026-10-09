@@ -25,13 +25,16 @@ function bas(on: On, commande: 'ok' | 'pris' = 'ok') {
   on('session.cwd', () => ({ value: RACINE }))
   on('command.register', ($, e) => (commande === 'pris' ? { deny: `"/${e.name}" refused: another plugin registered it` } : { value: { command: e.name } }))
   on('ui.render', ($, e) => { const { Box, Text } = $.ui.resolve(e); return e.component === 'AbovePrompt' ? <Text>bandeau d'un autre mod</Text> : <Box /> })
+  on('prompt.submit', ($, e) => ({ text: e.text }))
 }
 
 // Le monde sous le plugin : un fichier suivi.json qu'on remplace, les appels d'interface notés
 function monde(on: On, commande: 'ok' | 'pris' = 'ok') {
   const fichier = { texte: doc([tache('T01', 1, { etape: 'worker', isole: true, debut: '2026-10-08T11:31:00+02:00' }), tache('T02', 1), tache('T03', 2)]), mtime: 1 }
-  const toasts: string[] = [], ouverts: string[] = [], remplis: string[] = [], fermes: string[] = []
+  const toasts: string[] = [], ouverts: string[] = [], remplis: string[] = [], fermes: string[] = [], statuts: (string | undefined)[] = [], sons: string[] = []
   bas(on, commande)
+  on('ui.status', ($, e) => { statuts.push(e.text); return { value: undefined } })
+  on('audio.play', ($, e) => { sons.push('asset' in e.clip ? String(e.clip.asset) : '?'); return { value: undefined } })
   on('fs.exists', ($, e) => ({ value: e.path === `${RACINE}/plans` || e.path === SUIVI }))
   on('fs.list', () => ({ value: [{ name: 'demo', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }, { name: 'LISEZMOI.md', kind: 'file' as const, size: 3, mtimeMs: 0, isLink: false }] }))
   on('fs.stat', ($, e) => (e.path === SUIVI ? { value: { kind: 'file' as const, size: fichier.texte.length, mtimeMs: fichier.mtime, isLink: false } } : { deny: 'ENOENT' }))
@@ -40,7 +43,7 @@ function monde(on: On, commande: 'ok' | 'pris' = 'ok') {
   on('ui.open', ($, e) => { ouverts.push(e.id + (e.closeOnEscape ? ' (Échap ferme)' : '')); return { value: { isPlaced: true as const } } })
   on('ui.close', ($, e) => { fermes.push(e.id); return { value: undefined } })
   on('prompt.fill', ($, e) => { remplis.push(`${e.mode}:${e.text}`); return { isFilled: true } })
-  return { fichier, toasts, ouverts, remplis, fermes }
+  return { fichier, toasts, ouverts, remplis, fermes, statuts, sons }
 }
 
 // La tête du bandeau pendant un run : une roue qui tourne
@@ -84,39 +87,72 @@ test('bandeau, /suivi et notifications pendant un run, sur le terminal et le bur
   expect(w.toasts).toEqual(['⚑ T02 attend un humain (15000 ms)'])
 })
 
-test('panneau /suivi : onglets, bilan et brouillon de PR dans le prompt', async ($, on) => {
-  mock.clock(on, { now: T0 })
+// Run 1 arrêté sur un point humain de T02, une relecture et une décision d'office de T01
+const ARRET = doc([tache('T01', 1, { statut: 'fusionnée', essais: 2 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret manquant'] })], {
+  runs: [{ numero: 1, run_id: null, phase: 1, mode: 'phase', parallelisme: 2, corrections_max: 2, decisions_office_max: 3, statut: 'arbitrage', debut: '2026-10-08T11:30:00+02:00', fin: '2026-10-08T11:50:00+02:00', detail: null, arbitrages_appliques: [], amendements_ecartes: [], taches_ajoutees: [], reportees: [], non_lancees: [], en_attente: ['T02'], en_attente_prerequis: [] }],
+  points: [{ tache: 'T02', titre: 'Secret manquant', humain: true, role: 'arret', statut: 'a-trancher' }],
+  relectures: [{ tache: 'T01', phase: 1, texte: '.env.example : ajouter MR_MAX', run: 1, quand: '2026-10-08T11:40:00+02:00' }],
+  decisions_office: [{ run: 1, tache: 'T01', titre: 'Seuil', option: 'A', description: 'plafond à 30 s' }],
+})
+
+test('panneau /suivi : une vue en cartes, ses touches, ses actions préparées dans le prompt', async ($, on) => {
+  const horloge = mock.clock(on, { now: T0 })
   const w = monde(on)
-  w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 2 }), tache('T02', 1)], { relectures: [{ tache: 'T01', phase: 1, texte: '.env.example : ajouter MR_MAX', run: 1, quand: '2026-10-08T11:40:00+02:00' }], decisions_office: [{ run: 1, tache: 'T01', titre: 'Seuil', option: 'A', description: 'plafond à 30 s' }] })
+  w.fichier.texte = ARRET
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
   const r = await $.command.run({ command: 'suivi', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
   expect(r.text ?? '').toMatch(/ouvert dans le panneau/)
   expect(w.ouverts).toEqual(['orchestre (Échap ferme)'])
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'orchestre', surface, ...PANE })
-    expect(await ui.find({ text: /Phase 1/ })).toBeDefined()
-    expect((await ui.find({ type: 'Text', text: /^■+$/ }))?.props.color).toBe('success')
-    // Les quatre onglets sont des boutons à touche, dans le même ordre, le focus sur l'onglet ouvert ; sa pastille
-    // ouvre la ligne d'aide
-    const bouton = (id: string) => ui.find({ type: 'Button', key: `onglet-${id}` })
-    for (const [id, touche] of [['taches', 't'], ['relire', 'r'], ['journal', 'j'], ['bilan', 'b']] as const) expect((await bouton(id))?.props.hotkey).toBe(touche)
-    expect((await bouton('taches'))?.props.autoFocus).toBe(true)
-    expect((await bouton('relire'))?.props.dimColor).toBe(true)
-    expect((await ui.find({ type: 'Text', text: ' Tâches ' }))?.props.backgroundColor).toBe('claude')
-    expect(await ui.find({ type: 'Text', text: /t r j b : onglet · Échap : fermer$/ })).toBeDefined()
-    await ui.press({ key: 'onglet-relire' })
-    expect((await ui.find({ type: 'Text', text: /^ À relire/ }))?.props.backgroundColor).toBe('claude')
-    expect((await bouton('relire'))?.props.autoFocus).toBe(true)
-    expect((await bouton('taches'))?.props.dimColor).toBe(true)
-    expect(await ui.find({ text: /\.env\.example : ajouter MR_MAX/ })).toBeDefined()
-    await ui.press({ key: 'onglet-bilan' })
-    expect(await ui.find({ text: /1 décision prise d'office/ })).toBeDefined()
-    await ui.press({ key: 'pr' })
-    await ui.press({ key: 'onglet-taches' })
+    // En tête, l'état global ; puis les touches qui font défiler, le focus sur la première
+    expect(await ui.find({ type: 'Text', text: ' ⚠ 1 À TOI ' })).toBeDefined()
+    const nav = (id: string) => ui.find({ type: 'Button', key: `nav-${id}` })
+    for (const [id, touche] of [['toi', 'r'], ['run', 'b'], ['taches', 't'], ['journal', 'j']] as const) expect((await nav(id))?.props.hotkey).toBe(touche)
+    expect((await nav('toi'))?.props.autoFocus).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /· 1-9 : agir · Échap : fermer$/ })).toBeDefined()
+    // Les cartes, dans l'ordre, avec leur bord : À toi en ambre, le run arrêté en ambre aussi
+    expect((await ui.find({ type: 'Text', text: '⚠ À toi' }))?.props.color).toBe('warning')
+    expect(await ui.find({ type: 'Text', text: /^■ Run 1 · phase 1 · arrêt par phase$/ })).toBeDefined()
+    expect((await ui.find({ key: 'carte-toi' }))?.props.borderStyle).toBe('round')
+    expect((await ui.find({ key: 'carte-run' }))?.props.borderColor).toBe('warning')
+    expect((await ui.find({ key: 'carte-taches' }))?.props.borderStyle).toBeUndefined()
+    // Une touche par ligne de « À toi » ; la suite du run sur l
+    const action = (k: string) => ui.find({ type: 'Button', key: `action-${k}` })
+    expect([(await action('1'))?.props.label, (await action('1'))?.props.hotkey]).toEqual(['T02 · Secret manquant (humain)', '1'])
+    expect((await action('2'))?.props.label).toBe('T01 · .env.example : ajouter MR_MAX')
+    expect((await action('3'))?.props.label).toBe('T01 · Seuil : A (plafond à 30 s)')
+    expect((await action('l'))?.props.label).toBe('/orchestre:lancer plans/demo --reprendre')
+    await ui.press({ key: 'action-1' })
+    await ui.press({ key: 'action-2' })
+    // j : tout le journal, et le panneau défile jusqu'à lui
+    await ui.press({ key: 'nav-journal' })
+    expect((await nav('journal'))?.props.label).toBe('journal (moins)')
+    await ui.press({ key: 'nav-journal' })
     await ui.unmount()
   }
-  expect(w.remplis.length).toBe(2)
-  expect(w.remplis[0] ?? '').toMatch(/^append:[\s\S]*- T01 : \.env\.example : ajouter MR_MAX/)
+  expect(w.remplis).toEqual([
+    'append:/orchestre:lancer plans/demo --reprendre', 'append:Relis avec moi, avant la PR (relecture de T01) : .env.example : ajouter MR_MAX',
+    'append:/orchestre:lancer plans/demo --reprendre', 'append:Relis avec moi, avant la PR (relecture de T01) : .env.example : ajouter MR_MAX',
+  ])
+  // Le défilement vers une carte ($.ui.scroll) demande la mise en page du moteur, que le kit de test n'a pas
+  expect(w.toasts.filter(t => /^Dans le prompt : relis, complète, puis envoie/.test(t)).length).toBe(4)
+  // Étroit : plus de bords
+  const etroit = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...PANE, props: { ...PANE.props, bodyColumns: 50 } })
+  expect((await etroit.find({ key: 'carte-run' }))?.props.borderStyle).toBeUndefined()
+  await etroit.unmount()
+  // Plan terminé : la suite est le brouillon de PR, sur p
+  w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 2 }), tache('T02', 1, { statut: 'fusionnée', essais: 1 })], {
+    runs: [{ numero: 2, run_id: null, phase: 1, mode: 'auto', parallelisme: 2, corrections_max: 2, decisions_office_max: 3, statut: 'terminé', debut: '2026-10-08T11:52:00+02:00', fin: '2026-10-08T11:58:00+02:00', detail: null, arbitrages_appliques: [], amendements_ecartes: [], taches_ajoutees: [], reportees: [], non_lancees: [], en_attente: [], en_attente_prerequis: [] }],
+    relectures: [{ tache: 'T01', phase: 1, texte: '.env.example : ajouter MR_MAX', run: 1, quand: '2026-10-08T11:40:00+02:00' }],
+  })
+  w.fichier.mtime = 2
+  await horloge.advance(2100)
+  const fin = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...PANE })
+  expect(await fin.find({ type: 'Text', text: '⚑ À relire avant la PR' })).toBeDefined()
+  await fin.press({ key: 'action-p' })
+  await fin.unmount()
+  expect(w.remplis.at(-1) ?? '').toMatch(/^append:Plan demo : 2\/2 tâches fusionnées[\s\S]*- T01 : \.env\.example : ajouter MR_MAX/)
 })
 
 test('rien à suivre : pas de bandeau, /suivi le dit ; une session hébergée attend sa surface, un -p ne lit rien', async ($, on) => {
@@ -173,7 +209,7 @@ test('fin de run : « Masquer » sur la touche 0, place des boutons gardée, mas
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
   // Une largeur où les libellés tiennent avec un seul bouton (12 cellules), pas avec « 1: Détail » et « 0: Masquer » (24)
   const inst = normaliser(JSON.parse(FINI))!
-  const relire = (colonnes: number, reserve: number) => bandeau(inst, T0, colonnes, reserve)!.find(m => m.a === 'relire')?.t
+  const relire = (colonnes: number, reserve: number) => bandeau(inst, T0, colonnes, reserve)!.find(m => m.k === 'relire')?.t
   let colonnes = largeur(bandeau(inst, T0, 1000)!) + 24
   while (colonnes > 40 && !(relire(colonnes, 24) === '1' && relire(colonnes, 12) === '1 à relire')) colonnes--
   expect([relire(colonnes, 24), relire(colonnes, 12)]).toEqual(['1', '1 à relire'])
@@ -183,8 +219,11 @@ test('fin de run : « Masquer » sur la touche 0, place des boutons gardée, mas
   expect((await ui.find({ key: 'detail' }))?.props.hotkey).toBe('1')
   const bouton = await ui.find({ key: 'masquer' })
   expect(bouton?.props.hotkey).toBe('0')
+  expect(w.statuts).toEqual([])
   await ui.press({ key: 'masquer' })
   await ui.unmount()
+  // Masqué, le bandeau laisse une trace dans la ligne d'état : il reste une relecture et une tâche qui attend
+  expect(w.statuts).toEqual(['orchestre ■ 1/2 · ⚑ 1 · ⚠ 1'])
   const masque = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND })
   expect(await masque.find({ text: /■ / })).toBeUndefined()
   expect(await masque.find({ text: /bandeau d'un autre mod/ })).toBeDefined()
@@ -197,34 +236,77 @@ test('fin de run : « Masquer » sur la touche 0, place des boutons gardée, mas
   await apres.unmount()
 })
 
-test('bandeau : « à relire », « à toi » et « Détail » ouvrent le panneau sur le bon onglet', async ($, on) => {
+test('bandeau : « à relire » et « à toi » ouvrent le panneau sur la carte « À toi », « Détail » en haut', async ($, on) => {
   mock.clock(on, { now: T0 })
   const w = monde(on)
   w.fichier.texte = FINI
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
-  const onglet = async () => {
-    const p = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...PANE })
-    const actif = (await p.find({ type: 'Text', text: / (Tâches|À relire \(\d+\)|Journal|Bilan) $/ }))?.text.trim()
-    await p.unmount()
-    return actif
-  }
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'orchestre', surface, ...BAND })
     // Le glyphe garde sa couleur ; la mention est un bouton (le kit ne rend pas le style de survol)
     expect((await ui.find({ type: 'Text', text: '⚠ ' }))?.props.color).toBe('warning')
-    expect((await ui.find({ type: 'Button', key: 'aller-bilan' }))?.props.label).toBe('1 à toi')
+    expect((await ui.find({ type: 'Button', key: 'aller-toi' }))?.props.label).toBe('1 à toi')
     expect((await ui.find({ type: 'Button', key: 'aller-relire' }))?.props.label).toBe('1 à relire')
     expect((await ui.find({ type: 'Button', key: 'detail' }))?.props.hotkey).toBe('1')
-    await ui.press({ key: 'aller-bilan' })
-    expect(await onglet()).toBe('Bilan')
+    await ui.press({ key: 'aller-toi' })
     await ui.press({ key: 'aller-relire' })
-    expect(await onglet()).toBe('À relire (1)')
-    // « Détail » ouvre le panneau sur l'onglet déjà choisi
     await ui.press({ key: 'detail' })
-    expect(await onglet()).toBe('À relire (1)')
     await ui.unmount()
   }
   expect(w.ouverts).toEqual(Array(6).fill('orchestre (Échap ferme)'))
+})
+
+test('notifications : seul ce qui demande quelqu\'un, avec un son après /suivi son', async ($, on) => {
+  const horloge = mock.clock(on, { now: T0 })
+  mock.store(on)
+  const w = monde(on)
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  expect((await $.command.run(CMD('son'))).text ?? '').toMatch(/son activé/)
+  // T01 fusionnée et une relecture (pas de notification), T02 attend un humain (notification et son)
+  w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'] }), tache('T03', 2)], { relectures: [{ tache: 'T01', phase: 1, texte: 'x', run: 1, quand: '2026-10-08T11:59:00+02:00' }] })
+  w.fichier.mtime = 2
+  await horloge.advance(2100)
+  expect(w.toasts).toEqual(['⚑ T02 attend un humain (15000 ms)'])
+  expect(w.sons).toEqual(['sons/attend.wav'])
+  expect((await $.command.run(CMD('son'))).text ?? '').toMatch(/son coupé/)
+  w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'] }), tache('T03', 2, { statut: 'bloquée' })])
+  w.fichier.mtime = 3
+  await horloge.advance(2100)
+  expect(w.toasts.at(-1)).toBe('✗ T03 bloquée (15000 ms)')
+  expect(w.sons).toEqual(['sons/attend.wav'])
+})
+
+test('retour après 15 min sans prompt : une notification dit ce qui a changé', { timeoutMs: 60000 }, async ($, on) => {
+  const horloge = mock.clock(on, { now: T0 })
+  const w = monde(on)
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'lance le run' } as never)
+  await $.command.run(CMD(''))
+  expect(w.toasts).toEqual([])
+  // Pendant l'absence : T01 fusionnée, T02 se met à attendre
+  const q = (min: number) => new Date(T0 + min * 60000).toISOString()
+  // Un run fini : 16 minutes d'horloge sans animation à dessiner
+  w.fichier.texte = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1, fin: q(5) }), tache('T02', 1, { statut: 'besoin-humain', blocage: ['secret'], fin: q(9) }), tache('T03', 2)], { runs: [{ numero: 1, run_id: null, phase: 1, mode: 'auto', parallelisme: 2, corrections_max: 2, decisions_office_max: 3, statut: 'arbitrage', debut: q(-30), fin: q(10), detail: null, arbitrages_appliques: [], amendements_ecartes: [], taches_ajoutees: [], reportees: [], non_lancees: [], en_attente: [], en_attente_prerequis: [] }], journal: [
+    { quand: q(5), genre: 'statut', tache: 'T01', texte: 'T01 : fusionnée (1 essai)' },
+    { quand: q(9), genre: 'statut', tache: 'T02', texte: 'T02 : besoin-humain (1 essai) — secret' },
+  ] })
+  w.fichier.mtime = 2
+  await horloge.advance(16 * 60000)
+  const avant = w.toasts.length
+  await $.prompt.submit({ text: 'où en est-on ?' } as never)
+  expect(w.toasts.slice(avant)).toEqual(['↩ Depuis 16 min : ✓ T01 fusionnée · ⚠ T02 t\'attend (15000 ms)'])
+  // Un prompt peu après, même avec du nouveau dans le journal : rien
+  w.fichier.texte = w.fichier.texte.replace('"journal":[', `"journal":[{"quand":"${q(16.5)}","genre":"statut","tache":"T03","texte":"T03 : fusionnée (1 essai)"},`)
+  w.fichier.mtime = 3
+  await horloge.advance(60000)
+  await $.prompt.submit({ text: 'merci' } as never)
+  expect(w.toasts.length).toBe(avant + 1)
+  // Le panneau rouvert dit en tête ce qui a changé depuis sa dernière ouverture
+  await $.command.run(CMD(''))
+  const p = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...PANE })
+  expect(await p.find({ type: 'Text', text: 'Depuis 17 min' })).toBeDefined()
+  expect(await p.find({ type: 'Text', text: "⚠ T02 t'attend" })).toBeDefined()
+  await p.unmount()
 })
 
 test('/suivi déjà pris par un autre plugin : le suivi démarre quand même et le dit', async ($, on) => {
@@ -280,8 +362,9 @@ const CMD = (args: string) => ({ command: 'suivi', args, origin: { kind: 'compos
 
 test('/suivi demo, sans dépôt : un run joué en mémoire, marqué DÉMO, ses notifications, puis retour au vrai suivi', { timeoutMs: 30000 }, async ($, on) => {
   const horloge = mock.clock(on, { now: T0 })
-  const toasts: string[] = [], lus: string[] = [], ouverts: string[] = [], fermes: string[] = []
+  const toasts: string[] = [], lus: string[] = [], ouverts: string[] = [], fermes: string[] = [], remplis: string[] = []
   bas(on)
+  on('prompt.fill', ($, e) => { remplis.push(e.text); return { isFilled: true } })
   on('fs.exists', ($, e) => { lus.push(e.path); return { value: false } })
   on('ui.toast', ($, e) => { toasts.push(e.text + (e.timeoutMs ? ` (${e.timeoutMs} ms)` : '')); return { value: undefined } })
   on('ui.open', ($, e) => { ouverts.push(e.title ?? ''); return { value: { isPlaced: true as const } } })
@@ -301,12 +384,21 @@ test('/suivi demo, sans dépôt : un run joué en mémoire, marqué DÉMO, ses n
   await horloge.advance(instantDuPas(NB_PAS - 1, 0) + 500)
   expect(lus.length).toBe(avant)
   expect(await ui.find({ text: /^✓ $/ })).toBeDefined()
+  // Seul ce qui demande quelqu'un devient une notification
   expect(toasts).toContain('⚑ T03 attend un humain (15000 ms)')
   expect(toasts).toContain('Run arrêté : T03, Clé SMTP de test (15000 ms)')
-  expect(toasts).toContain('Phase 1 terminée')
-  expect(toasts).toContain('Run 2 (phases 1 à 2) : terminé')
+  expect(toasts).not.toContain('Phase 1 terminée')
+  expect(toasts.some(t => t.startsWith('Run 2 (phases 1 à 2) : terminé'))).toBe(false)
   expect(toasts.at(-1) ?? '').toMatch(/^Démo terminée/)
   await ui.unmount()
+  // Dans la démo, une action du panneau dit ce qu'elle ferait, sans rien mettre dans le prompt
+  const p = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...PANE })
+  expect(await p.find({ type: 'Text', text: /^pas 21\/21 · Fin du run 2 : terminé$/ })).toBeDefined()
+  expect((await p.find({ type: 'Text', text: ' DÉMO ' }))?.props.backgroundColor).toBe('merged')
+  await p.press({ key: 'action-p' })
+  await p.unmount()
+  expect(remplis).toEqual([])
+  expect(toasts.at(-1) ?? '').toMatch(/^Démo : cette touche préparerait dans le prompt « Plan site-vitrine : 5\/5 tâches fusionnées/)
   // Une minute après la fin, le vrai suivi reprend : ici, rien à suivre ; le panneau de la démo se ferme
   expect(fermes).toEqual([])
   await horloge.advance(60000)

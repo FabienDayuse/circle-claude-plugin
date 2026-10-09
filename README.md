@@ -4,7 +4,7 @@ Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plu
 
 | Plugin | Version | Rôle |
 | :- | :- | :- |
-| `orchestre` | 0.9.1 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. Depuis la 0.9.0, il inclut le mod de suivi (auparavant le plugin `orchestre-suivi`), en lecture seule sur `plans/<nom>/suivi.json` : bandeau en couleurs et animé au-dessus du prompt pendant un run (une case par tâche colorée par statut, phases en points, « à relire » et « à toi » cliquables, étape en cours, dernière nouvelle, bouton « Détail » sur la touche 1), suffixe du spinner, `/suivi` (panneau Tâches, À relire, Journal, Bilan, touches t r j b, ou `/suivi texte`), `/suivi demo`, notifications, brouillon de PR dans le prompt. |
+| `orchestre` | 0.10.0 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. Depuis la 0.9.0, il inclut le mod de suivi (auparavant le plugin `orchestre-suivi`), en lecture seule sur `plans/<nom>/suivi.json` : bandeau en couleurs et animé au-dessus du prompt pendant un run (une case par tâche colorée par statut, phases en points, « à relire » et « à toi » cliquables, étape en cours, dernière nouvelle, bouton « Détail » sur la touche 1), suffixe du spinner, `/suivi` (un panneau en cartes : ce qui t'attend avec une action par ligne, le run, les tâches en frise par étape, le journal ; ou `/suivi texte`), `/suivi demo` commentée, notifications pour ce qui demande quelqu'un (`/suivi son` pour un son), ce qui a changé pendant ton absence, ligne d'état quand le bandeau est masqué. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
@@ -84,7 +84,11 @@ Dans une session neuve. Pré-vol (version, réglages, git, nettoyage des worktre
 
 Pendant un run, la session pilote ne touche pas au checkout principal, où travaillent les agents : une demande sur le dépôt attend la fin du run. Un fichier que les agents n'ont pas le droit de lire ou d'écrire (réglages du projet ou de l'organisation), ou une commande qu'ils n'ont pas le droit de lancer, n'arrête pas le run : il devient une relecture, à faire toi-même avant la PR, avec la commande donnée à la fin.
 
-Suivre un run : `/suivi` (bandeau, panneau, notifications, sans tour de Claude), ou `/orchestre:etat`, ci-dessous, pour le plan ; `/workflows` pour l'étape de chaque agent. Depuis la 0.8.0, l'état du plan et des runs est aussi tenu dans `plans/<nom>/suivi.json` (hors git), que seul `scripts/suivi.mjs` écrit. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
+Suivre un run : `/suivi` (bandeau, panneau, notifications, sans tour de Claude), ou `/orchestre:etat`, ci-dessous, pour le plan ; `/workflows` pour l'étape de chaque agent.
+
+- Le bandeau, au-dessus du prompt : avancement, puis ce qui t'attend (« ⚑ à relire », « ⚠ à toi », qui se cliquent), puis la tâche en cours ; « 1: Détail » ouvre le panneau, et la touche 1 marche aussi tapée seule dans un prompt vide. À la fin d'un run, « 0: Masquer » ; la ligne d'état garde alors « orchestre ✓ 5/5 · ⚑ 3 » tant qu'il reste quelque chose à faire.
+- Le panneau, en cartes : « À toi » d'abord, quand quelque chose t'attend, puis le run, les tâches et le journal. r, b, t et j font défiler jusqu'à une carte (j montre aussi tout le journal). Les touches 1 à 9 préparent dans le prompt l'action d'une ligne de « À toi » (reprendre le run, relire un fichier, revoir une décision d'office…), l celle de la suite d'un run fini, p le brouillon de PR : rien n'est envoyé sans toi. ← et → restent à Claude Code.
+- Notifications : seulement pour une tâche qui attend un humain, bloquée ou en échec, un run arrêté ou en erreur ; `/suivi son` y ajoute un son (macOS). Au premier prompt après 15 min sans prompt, une notification dit ce qui a changé. Depuis la 0.8.0, l'état du plan et des runs est aussi tenu dans `plans/<nom>/suivi.json` (hors git), que seul `scripts/suivi.mjs` écrit. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
 
 ### 5. `/orchestre:etat [plans/<nom>]` : voir où en est le plan
 
@@ -128,7 +132,7 @@ Dans n'importe quelle session où le mod est chargé, avec ou sans plan :
 /suivi demo
 ```
 
-Le mod joue en mémoire deux runs d'un plan fictif de 5 tâches, `site-vitrine`, en un peu plus d'une minute : bandeau en couleurs et animé, marqué DÉMO, notifications, arrêt sur un arbitrage (une pause de 12 s pour ouvrir `/suivi`), reprise, fin. Rien n'est écrit ni lu dans le dépôt pendant ce temps. Une minute après le dernier pas, le vrai suivi reprend ; `/suivi auto` y revient tout de suite. Le scénario est celui de `tests/demo-suivi.mjs`, qui le joue avec le vrai `suivi.mjs` : les tests vérifient que les deux donnent les mêmes notifications et le même journal.
+Le mod joue en mémoire deux runs d'un plan fictif de 5 tâches, `site-vitrine`, en un peu plus d'une minute : bandeau en couleurs et animé, marqué DÉMO, notifications, arrêt sur un arbitrage (une pause de 12 s pour ouvrir `/suivi`), reprise, fin. L'en-tête du panneau donne le pas et, à certains pas, le geste à essayer ; une touche d'action y dit ce qu'elle ferait, sans rien mettre dans le prompt. Rien n'est écrit ni lu dans le dépôt pendant ce temps. Une minute après le dernier pas, le vrai suivi reprend ; `/suivi auto` y revient tout de suite. Le scénario est celui de `tests/demo-suivi.mjs`, qui le joue avec le vrai `suivi.mjs` : les tests vérifient que les deux donnent les mêmes notifications et le même journal.
 
 Si le mod ne montre rien ([dépannage des mods](https://code.claude.com/docs/en/plugins/mods/troubleshoot)) :
 
@@ -207,7 +211,8 @@ plugins/orchestre/
 ├── hooks/hooks.json                 déclare le module du mod
 ├── hooks/register.tsx               le mod : fichiers, minuteur, dessin, /suivi
 ├── hooks/modele.mjs                 lecture de suivi.json et mise en forme, sans moteur
-├── hooks/demo.mjs                   /suivi demo : le run joué en mémoire, pas à pas
+├── hooks/demo.mjs                   /suivi demo : le run joué en mémoire, pas à pas, et sa légende
+├── sons/attend.wav                  le son de /suivi son
 ├── types/index.d.ts                 contrat de l'état du mod ($.state)
 └── tests/suivi.test.tsx             tests sous le moteur (claude plugin test)
 tests/
@@ -225,7 +230,7 @@ tests/
 ## Développer
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
-- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 18 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont `/suivi demo` comparée au vrai `suivi.mjs`. Les 13 tests du mod sous le moteur passent par `npm run validate`.
+- Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 19 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont `/suivi demo` comparée au vrai `suivi.mjs`. Les 15 tests du mod sous le moteur passent par `npm run validate`.
 - Validation : `npm run validate` (`claude plugin validate` sur le plugin et sur la marketplace, puis `claude plugin test` du plugin, qui lance les tests du mod).
 - Essayer le mod sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/suivi demo` ; ou, sur un vrai `suivi.json`, `node tests/demo-suivi.mjs <dossier>` dans un autre terminal.
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
