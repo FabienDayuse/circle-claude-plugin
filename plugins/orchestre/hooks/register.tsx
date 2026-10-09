@@ -14,6 +14,8 @@ import { NB_PAS, PAS_DEMO_MS, PLAN_DEMO, finDemo, instantaneDemo, pasA } from '.
 import { DUREE_IMPORTANTE_MS, FORMAT, IMAGE_MS, bandeau, changements, formatDe, importante, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, nouvelle, runActif, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
 
 const PANNEAU = 'orchestre'
+const AIDE_ONGLETS = '   t r j b : onglet · Échap : fermer'
+const RIEN_A_SUIVRE = 'à suivre dans ce dépôt : aucun plans/<nom>/suivi.json. Il apparaît au premier run d\'orchestre (0.8 ou plus). /suivi demo joue la démo.'
 const RELIRE_MS = 2000
 // Un run interrompu (« sans nouvelles ») ne s'anime plus : son âge avance toutes les 30 s
 const LENT_MS = 30000
@@ -24,7 +26,8 @@ const onglet = atom({ plugin: 'orchestre', key: 'onglet' } as const, 'taches')
 const masque = atom({ plugin: 'orchestre', key: 'masque' } as const, null)
 const alerte = atom({ plugin: 'orchestre', key: 'alerte' } as const, null)
 
-// Place du bouton « Masquer » (« 0: Masquer ») à la suite du bandeau
+// Place des boutons à la suite du bandeau : « 1: Détail », toujours, et « 0: Masquer » à la fin d'un run
+const RESERVE_DETAIL = 12
 const RESERVE_MASQUER = 12
 
 // /clear, /resume et /branch remettent $.state à ses valeurs par défaut sans relancer session.start : les deux choix de
@@ -108,6 +111,8 @@ async function oublierDemo($: EngineInterface): Promise<void> {
 // Le mode démo (/suivi demo) : un run joué en mémoire, pas à pas, avec ses notifications ; la dernière image reste une
 // minute, puis le vrai suivi reprend. Le « Masquer » d'un run de la démo ne vaut pas pour les vrais runs.
 let demo: { debut: number; pas: number; vu: number; fini: boolean } | null = null
+// Le panneau ouvert pendant la démo porte « (démo) » dans son titre : il se ferme quand la démo rend la main
+let panneauDemo = false
 async function lancerDemo($: EngineInterface): Promise<void> {
   demo = { debut: await $.clock.now(), pas: PAS_DEMO_MS, vu: -1, fini: false }
   masqueChoisi = null
@@ -135,6 +140,10 @@ async function avancerDemo($: EngineInterface): Promise<void> {
 async function quitterDemo($: EngineInterface): Promise<void> {
   if (!demo) return
   demo = null
+  if (panneauDemo) {
+    panneauDemo = false
+    await $.ui.close({ id: PANNEAU }).catch(() => undefined)
+  }
   masqueChoisi = null
   await update($, masque, () => null)
   await update($, instantane, () => null)
@@ -219,11 +228,10 @@ export const register: Register = on => {
     if (plan || mots.includes('auto')) await quitterDemo($)
     await rafraichir($, true).catch(() => undefined)
     const inst = await read($, instantane)
-    if (!inst) return { text: 'orchestre : aucun plans/<nom>/suivi.json dans ce dépôt. Il apparaît au premier run d\'orchestre 0.8 ou plus. Pour voir le mod à l\'œuvre : /suivi demo.' }
+    if (!inst) return { text: `orchestre : rien ${RIEN_A_SUIVRE}` }
     const maintenant = await $.clock.now()
     if (mots.includes('texte')) return { text: texteEtat(inst, maintenant) }
-    const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}${inst.demo ? ' (démo)' : ''}`, focus: true, closeOnEscape: true }).catch(() => null)
-    return ouvert?.isPlaced ? { text: `Suivi de ${inst.plan} ouvert dans le panneau.` } : { text: texteEtat(inst, maintenant) }
+    return (await ouvrirPanneau($, inst)) ? { text: `Suivi de ${inst.plan} ouvert dans le panneau.` } : { text: texteEtat(inst, maintenant) }
   })
 
   // Le bandeau : pendant un run, puis l'état de fin jusqu'à ce qu'on le masque ou qu'un run reparte. La bande est partagée :
@@ -234,7 +242,7 @@ export const register: Register = on => {
     if (!inst || !inst.run || e.props.hasSurvey) return next(e)
     const fini = inst.run.statut !== 'en-cours'
     if (fini && (await read($, masque)) === inst.run.numero) return next(e)
-    const ligne = bandeau(inst, await $.clock.now(), e.props.bodyColumns, fini ? RESERVE_MASQUER : 0, true)
+    const ligne = bandeau(inst, await $.clock.now(), e.props.bodyColumns, RESERVE_DETAIL + (fini ? RESERVE_MASQUER : 0), true)
     if (!ligne) return next(e)
     const autres = await next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -243,6 +251,8 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Box key="orchestre" flexDirection="row">
           {dessiner($, e, ligne, 'bandeau')}
+          <Text>{'   '}</Text>
+          <Button key="detail" label="Détail" hotkey="1" plain onPress={() => ouvrirDepuisBandeau($, null)} />
           {fini && <Text> </Text>}
           {fini && <Button key="masquer" label="Masquer" hotkey="0" plain onPress={() => { masqueChoisi = numero; return update($, masque, () => numero) }} />}
         </Box>
@@ -261,7 +271,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANNEAU }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const inst = await read($, instantane)
-    if (!inst) return <Text dimColor>Aucun suivi.json lu pour l'instant.</Text>
+    if (!inst) return <Text dimColor wrap="wrap">{`Rien ${RIEN_A_SUIVRE}`}</Text>
     const actif: Onglet = await read($, onglet)
     const maintenant = await $.clock.now()
     const colonnes = e.props.bodyColumns
@@ -270,21 +280,21 @@ export const register: Register = on => {
       : actif === 'journal' ? lignesJournal(inst, maintenant, colonnes)
       : actif === 'bilan' ? lignesBilan(inst, maintenant)
       : lignesTaches(inst, maintenant, colonnes, true)
-    // L'onglet ouvert est une pastille ; les autres, des boutons avec leur touche
-    const ongletBouton = (id: Onglet, libelle: string, touche: string) => (id === actif
-      ? <Text key={`onglet-${id}`} color="inverseText" backgroundColor="claude" bold>{` ${libelle} `}</Text>
-      : <Button key={`onglet-${id}`} label={libelle} hotkey={touche} plain onPress={() => update($, onglet, () => id)} />
-    )
+    // Les quatre onglets restent des boutons, dans le même ordre : ↑↓ et Tab les parcourent sans sauter, et le focus
+    // part de l'onglet ouvert. ← et → sont à Claude Code, pas au panneau : la ligne d'aide donne les touches du mod.
+    const onglets: [Onglet, string, string][] = [['taches', 'Tâches', 't'], ['relire', `À relire (${inst.relectures.length})`, 'r'], ['journal', 'Journal', 'j'], ['bilan', 'Bilan', 'b']]
+    const libelleActif = onglets.find(o => o[0] === actif)?.[1] ?? ''
     return (
       <Box flexDirection="column">
         <Box flexDirection="row">
-          {ongletBouton('taches', 'Tâches', 't')}
-          <Text> </Text>
-          {ongletBouton('relire', `À relire (${inst.relectures.length})`, 'r')}
-          <Text> </Text>
-          {ongletBouton('journal', 'Journal', 'j')}
-          <Text> </Text>
-          {ongletBouton('bilan', 'Bilan', 'b')}
+          {onglets.flatMap(([id, libelle, touche], i) => [
+            ...(i ? [<Text key={`entre-${id}`}>{'  '}</Text>] : []),
+            <Button key={`onglet-${id}`} label={libelle} hotkey={touche} plain {...(id === actif ? { autoFocus: true as const } : { dimColor: true })} onPress={() => update($, onglet, () => id)} />,
+          ])}
+        </Box>
+        <Box flexDirection="row">
+          <Text key="ouvert" color="inverseText" backgroundColor="claude" bold>{` ${libelleActif} `}</Text>
+          <Text key="aide" dimColor wrap="truncate">{AIDE_ONGLETS}</Text>
         </Box>
         <Text> </Text>
         {lignes.map((l, i) => dessiner($, e, l, `l${i}`))}
@@ -299,6 +309,20 @@ export const register: Register = on => {
   })
 }
 
+// Le panneau, sur un onglet donné ou celui déjà choisi. Ouvert pendant la démo, il se fermera avec elle.
+async function ouvrirPanneau($: EngineInterface, inst: Instantane, vers: Onglet | null = null): Promise<boolean> {
+  if (vers) await update($, onglet, () => vers)
+  const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}${inst.demo ? ' (démo)' : ''}`, focus: true, closeOnEscape: true }).catch(() => null)
+  if (ouvert?.isPlaced) panneauDemo = inst.demo
+  return !!ouvert?.isPlaced
+}
+
+// Un clic dans le bandeau (« Détail », « à relire », « à toi »), ou la touche 1 tapée seule dans un prompt vide
+async function ouvrirDepuisBandeau($: EngineInterface, vers: Onglet | null): Promise<void> {
+  const inst = await read($, instantane)
+  if (inst && !(await ouvrirPanneau($, inst, vers))) $.ui.toast('Le panneau ne s\'ouvre pas ici : /suivi texte donne le même état.')
+}
+
 async function preparerPR($: EngineInterface, inst: Instantane): Promise<void> {
   // Ajouté après ce qui est déjà tapé, jamais à sa place
   const fait = await $.prompt.fill({ text: textePR(inst, await $.clock.now()), mode: 'append' })
@@ -307,13 +331,17 @@ async function preparerPR($: EngineInterface, inst: Instantane): Promise<void> {
 
 // Une ligne de morceaux : un Text par morceau, dans une rangée
 function dessiner($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], ligne: Ligne, cle: string) {
-  const { Box, Text } = $.ui.resolve(e)
+  const { Box, Button, Text } = $.ui.resolve(e)
   if (!ligne.length) return <Text key={cle}> </Text>
   return (
     <Box key={cle} flexDirection="row">
-      {ligne.map((m, i) => (
-        <Text key={`${cle}-${i}`} color={m.c} backgroundColor={m.f} bold={m.b} dimColor={m.d} wrap="truncate">{m.t}</Text>
-      ))}
+      {ligne.map((m, i) => {
+        const vers = m.a
+        // Un morceau qui mène à un onglet est un bouton : la pastille ambre au survol
+        return vers
+          ? <Button key={`aller-${vers}`} label={m.t} plain hover={{ scope: `orchestre-${vers}`, color: 'inverseText', backgroundColor: 'warning', bold: true }} onPress={() => ouvrirDepuisBandeau($, vers)} />
+          : <Text key={`${cle}-${i}`} color={m.c} backgroundColor={m.f} bold={m.b} dimColor={m.d} wrap="truncate">{m.t}</Text>
+      })}
     </Box>
   )
 }

@@ -347,7 +347,7 @@ export const largeur = l => l.reduce((n, m) => n + [...m.t].length, 0)
 
 /**
  * Le bandeau au-dessus du prompt : une ligne, ou rien (null) quand aucun run n'est à montrer. Il tient dans `colonnes`
- * moins `reserve` (la place d'un bouton à sa suite) : on retire l'aide, la dernière nouvelle, le détail de l'étape,
+ * moins `reserve` (la place des boutons à sa suite) : on retire la dernière nouvelle, le détail de l'étape,
  * puis on raccourcit les libellés et la barre, puis la durée et le numéro du run, jusqu'à ce qu'il tienne. La forme la
  * plus courte fait une quarantaine de cellules sur un petit plan, une soixantaine au plus sur un gros ; en deçà,
  * l'affichage coupe la fin de la ligne. Avec `anime`, la tête tourne et les tâches en cours pulsent dans la barre.
@@ -367,14 +367,13 @@ export function bandeau(inst, maintenant, colonnes, reserve = 0, anime = false) 
 }
 // Du plus complet au plus court
 const FORMES_BANDEAU = [
-  { aide: true, nouvelle: true, etape: true, libelles: true, barre: 14, nom: 28, duree: true, run: true },
-  { aide: false, nouvelle: true, etape: true, libelles: true, barre: 14, nom: 28, duree: true, run: true },
-  { aide: false, nouvelle: false, etape: true, libelles: true, barre: 12, nom: 24, duree: true, run: true },
-  { aide: false, nouvelle: false, etape: false, libelles: true, barre: 10, nom: 20, duree: true, run: true },
-  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 8, nom: 16, duree: true, run: true },
-  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 4, nom: 12, duree: false, run: true },
-  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 0, nom: 8, duree: false, run: true },
-  { aide: false, nouvelle: false, etape: false, libelles: false, barre: 0, nom: 8, duree: false, run: false },
+  { nouvelle: true, etape: true, libelles: true, barre: 14, nom: 28, duree: true, run: true },
+  { nouvelle: false, etape: true, libelles: true, barre: 12, nom: 24, duree: true, run: true },
+  { nouvelle: false, etape: false, libelles: true, barre: 10, nom: 20, duree: true, run: true },
+  { nouvelle: false, etape: false, libelles: false, barre: 8, nom: 16, duree: true, run: true },
+  { nouvelle: false, etape: false, libelles: false, barre: 4, nom: 12, duree: false, run: true },
+  { nouvelle: false, etape: false, libelles: false, barre: 0, nom: 8, duree: false, run: true },
+  { nouvelle: false, etape: false, libelles: false, barre: 0, nom: 8, duree: false, run: false },
 ]
 /**
  * @param {Instantane} inst @param {ReturnType<typeof resumer>} s @param {number} maintenant
@@ -392,14 +391,17 @@ function ligneBandeau(inst, s, maintenant, f, anime) {
   else l.push({ t: `phase ${phase}/${s.phaseMax}`, d: true })
   if (f.barre) l.push({ t: '  ' }, ...barreClasses(inst.taches.filter(t => t.statut !== 'annulée'), classeur(inst, maintenant), f.barre, maintenant, anime))
   l.push({ t: `  ${s.faites}/${s.total}`, b: true })
+  // Ce qui demande quelqu'un vient juste après l'avancement, avant les tâches en cours dont le texte change de longueur :
+  // les mentions ne bougent pas d'une étape à l'autre. Elles se cliquent (a : l'onglet du panneau ouvert) ; le glyphe
+  // garde la couleur.
+  if (s.relectures) l.push({ t: '  ' }, { t: '⚑ ', c: 'warning' }, { t: `${s.relectures}${f.libelles ? ' à relire' : ''}`, a: 'relire' })
+  if (s.attention.length) l.push({ t: '  ' }, { t: '⚠ ', c: 'warning', b: true }, { t: `${s.attention.length}${f.libelles ? ' à toi' : ''}`, a: 'bilan' })
   const ec = s.enCours
   if (ec.length && f.etape) {
     const t = /** @type {TacheVue} */ (ec[0])
     l.push({ t: `  ◐ ${t.id} `, c: 'suggestion' }, { t: ETAPES[t.etape || ''] || String(t.etape), c: COULEUR_ETAPE[t.etape || ''] || 'subtle', b: true })
     if (ec.length > 1) l.push({ t: ` +${ec.length - 1}`, c: 'suggestion' })
   } else if (ec.length) l.push({ t: `  ◐ ${ec.length}${f.libelles ? ' en cours' : ''}`, c: 'suggestion' })
-  if (s.relectures) l.push({ t: `  ⚑ ${s.relectures}${f.libelles ? ' à relire' : ''}`, c: 'warning' })
-  if (s.attention.length) l.push({ t: '  ' }, { t: ` ⚠ ${s.attention.length}${f.libelles ? ' à toi' : ''} `, c: 'inverseText', f: 'warning', b: true })
   if (s.silence) l.push({ t: f.libelles ? `  sans nouvelles depuis ${duree(maintenant - /** @type {number} */ (inst.maj))}` : `  ◌ ${duree(maintenant - /** @type {number} */ (inst.maj))}`, c: 'warning' })
   else if (!enCoursRun) l.push({ t: f.run ? `  run ${run.numero} ${run.statut}` : `  ${run.statut}`, c: run.statut === 'terminé' ? 'success' : 'warning', b: true })
   if (f.duree) l.push({ t: `  ⏱ ${duree(s.duree)}`, d: true })
@@ -409,7 +411,6 @@ function ligneBandeau(inst, s, maintenant, f, anime) {
     const vive = n.age < NOUVELLE_MS / 2
     l.push({ t: '   ' }, { ...n.marque, b: vive, d: !vive }, { t: ` ${court(n.texte, 44)}`, c: vive ? n.marque.c : undefined, b: vive, d: !vive })
   }
-  if (f.aide) l.push({ t: '   /suivi pour le détail', d: true })
   return l
 }
 

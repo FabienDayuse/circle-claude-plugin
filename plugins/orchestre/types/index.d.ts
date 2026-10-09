@@ -61,7 +61,8 @@ export type Instantane = {
 
 // Un morceau de ligne : texte, couleur du thème (success, error, warning, suggestion, subtle, claude, merged, planMode,
 // inverseText), gras, estompé, fond (une couleur du thème : pastilles « ⚠ à toi », « fusionnée »)
-export type Morceau = { t: string; c?: string; b?: boolean; d?: boolean; f?: string }
+// a : l'onglet du panneau qu'ouvre un clic sur le morceau, dessiné en bouton
+export type Morceau = { t: string; c?: string; b?: boolean; d?: boolean; f?: string; a?: Onglet }
 export type Ligne = Morceau[]
 
 export type Onglet = 'taches' | 'relire' | 'journal' | 'bilan'

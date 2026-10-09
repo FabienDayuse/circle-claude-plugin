@@ -30,7 +30,7 @@ function bas(on: On, commande: 'ok' | 'pris' = 'ok') {
 // Le monde sous le plugin : un fichier suivi.json qu'on remplace, les appels d'interface notés
 function monde(on: On, commande: 'ok' | 'pris' = 'ok') {
   const fichier = { texte: doc([tache('T01', 1, { etape: 'worker', isole: true, debut: '2026-10-08T11:31:00+02:00' }), tache('T02', 1), tache('T03', 2)]), mtime: 1 }
-  const toasts: string[] = [], ouverts: string[] = [], remplis: string[] = []
+  const toasts: string[] = [], ouverts: string[] = [], remplis: string[] = [], fermes: string[] = []
   bas(on, commande)
   on('fs.exists', ($, e) => ({ value: e.path === `${RACINE}/plans` || e.path === SUIVI }))
   on('fs.list', () => ({ value: [{ name: 'demo', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }, { name: 'LISEZMOI.md', kind: 'file' as const, size: 3, mtimeMs: 0, isLink: false }] }))
@@ -38,14 +38,16 @@ function monde(on: On, commande: 'ok' | 'pris' = 'ok') {
   on('fs.read', ($, e) => (e.path === SUIVI ? { value: fichier.texte } : { deny: 'ENOENT' }))
   on('ui.toast', ($, e) => { toasts.push(e.text + (e.timeoutMs ? ` (${e.timeoutMs} ms)` : '')); return { value: undefined } })
   on('ui.open', ($, e) => { ouverts.push(e.id + (e.closeOnEscape ? ' (Échap ferme)' : '')); return { value: { isPlaced: true as const } } })
+  on('ui.close', ($, e) => { fermes.push(e.id); return { value: undefined } })
   on('prompt.fill', ($, e) => { remplis.push(`${e.mode}:${e.text}`); return { isFilled: true } })
-  return { fichier, toasts, ouverts, remplis }
+  return { fichier, toasts, ouverts, remplis, fermes }
 }
 
 // La tête du bandeau pendant un run : une roue qui tourne
 const ROUE = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] $/
 
 const BAND = { component: 'AbovePrompt' as const, props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 140, scroll: { offset: 0, bodyRows: 9 }, view: {} } }
+const PANE = { component: 'Pane' as const, requestId: 'orchestre', props: { title: 'Orchestre', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} } }
 
 // Une minute d'animation à 150 ms : quelques secondes de dessins sous le kit
 test('bandeau, /suivi et notifications pendant un run, sur le terminal et le bureau', { timeoutMs: 20000 }, async ($, on) => {
@@ -91,13 +93,21 @@ test('panneau /suivi : onglets, bilan et brouillon de PR dans le prompt', async 
   expect(r.text ?? '').toMatch(/ouvert dans le panneau/)
   expect(w.ouverts).toEqual(['orchestre (Échap ferme)'])
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'orchestre', surface, component: 'Pane', requestId: 'orchestre', props: { title: 'Orchestre', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } })
+    const ui = await $.ui.mount({ plugin: 'orchestre', surface, ...PANE })
     expect(await ui.find({ text: /Phase 1/ })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: /^■+$/ }))?.props.color).toBe('success')
-    // L'onglet ouvert est une pastille, les autres des boutons
+    // Les quatre onglets sont des boutons à touche, dans le même ordre, le focus sur l'onglet ouvert ; sa pastille
+    // ouvre la ligne d'aide
+    const bouton = (id: string) => ui.find({ type: 'Button', key: `onglet-${id}` })
+    for (const [id, touche] of [['taches', 't'], ['relire', 'r'], ['journal', 'j'], ['bilan', 'b']] as const) expect((await bouton(id))?.props.hotkey).toBe(touche)
+    expect((await bouton('taches'))?.props.autoFocus).toBe(true)
+    expect((await bouton('relire'))?.props.dimColor).toBe(true)
     expect((await ui.find({ type: 'Text', text: ' Tâches ' }))?.props.backgroundColor).toBe('claude')
+    expect(await ui.find({ type: 'Text', text: /t r j b : onglet · Échap : fermer$/ })).toBeDefined()
     await ui.press({ key: 'onglet-relire' })
     expect((await ui.find({ type: 'Text', text: /^ À relire/ }))?.props.backgroundColor).toBe('claude')
+    expect((await bouton('relire'))?.props.autoFocus).toBe(true)
+    expect((await bouton('taches'))?.props.dimColor).toBe(true)
     expect(await ui.find({ text: /\.env\.example : ajouter MR_MAX/ })).toBeDefined()
     await ui.press({ key: 'onglet-bilan' })
     expect(await ui.find({ text: /1 décision prise d'office/ })).toBeDefined()
@@ -155,19 +165,22 @@ const FINI = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T
   relectures: [{ tache: 'T01', phase: 1, texte: '.env.example : ajouter MR_MAX', run: 1, quand: '2026-10-08T11:40:00+02:00' }],
 })
 
-test('fin de run : « Masquer » sur la touche 0, place du bouton gardée, masqué encore après /clear', async ($, on) => {
+test('fin de run : « Masquer » sur la touche 0, place des boutons gardée, masqué encore après /clear', async ($, on) => {
   mock.clock(on, { now: T0 })
   const memoire = etat(on)
   const w = monde(on)
   w.fichier.texte = FINI
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
-  // La ligne complète tiendrait seule, mais pas avec le bouton : l'aide « /suivi pour le détail » part
-  const pleine = largeur(bandeau(normaliser(JSON.parse(FINI))!, T0, 1000)!)
-  const ui = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: pleine + 5 } })
+  // Une largeur où les libellés tiennent avec un seul bouton (12 cellules), pas avec « 1: Détail » et « 0: Masquer » (24)
+  const inst = normaliser(JSON.parse(FINI))!
+  const relire = (colonnes: number, reserve: number) => bandeau(inst, T0, colonnes, reserve)!.find(m => m.a === 'relire')?.t
+  let colonnes = largeur(bandeau(inst, T0, 1000)!) + 24
+  while (colonnes > 40 && !(relire(colonnes, 24) === '1' && relire(colonnes, 12) === '1 à relire')) colonnes--
+  expect([relire(colonnes, 24), relire(colonnes, 12)]).toEqual(['1', '1 à relire'])
+  const ui = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: colonnes } })
   expect(await ui.find({ text: /■ / })).toBeDefined()
-  expect(await ui.find({ text: /\/suivi pour le détail/ })).toBeUndefined()
-  // Ce qui demande quelqu'un, en pastille sur fond ambre
-  expect((await ui.find({ type: 'Text', text: /⚠ 1 à toi/ }))?.props.backgroundColor).toBe('warning')
+  expect((await ui.find({ type: 'Button', key: 'aller-relire' }))?.props.label).toBe('1')
+  expect((await ui.find({ key: 'detail' }))?.props.hotkey).toBe('1')
   const bouton = await ui.find({ key: 'masquer' })
   expect(bouton?.props.hotkey).toBe('0')
   await ui.press({ key: 'masquer' })
@@ -182,6 +195,36 @@ test('fin de run : « Masquer » sur la touche 0, place du bouton gardée, masqu
   const apres = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND })
   expect(await apres.find({ text: /■ / })).toBeUndefined()
   await apres.unmount()
+})
+
+test('bandeau : « à relire », « à toi » et « Détail » ouvrent le panneau sur le bon onglet', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  const w = monde(on)
+  w.fichier.texte = FINI
+  await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  const onglet = async () => {
+    const p = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...PANE })
+    const actif = (await p.find({ type: 'Text', text: / (Tâches|À relire \(\d+\)|Journal|Bilan) $/ }))?.text.trim()
+    await p.unmount()
+    return actif
+  }
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'orchestre', surface, ...BAND })
+    // Le glyphe garde sa couleur ; la mention est un bouton (le kit ne rend pas le style de survol)
+    expect((await ui.find({ type: 'Text', text: '⚠ ' }))?.props.color).toBe('warning')
+    expect((await ui.find({ type: 'Button', key: 'aller-bilan' }))?.props.label).toBe('1 à toi')
+    expect((await ui.find({ type: 'Button', key: 'aller-relire' }))?.props.label).toBe('1 à relire')
+    expect((await ui.find({ type: 'Button', key: 'detail' }))?.props.hotkey).toBe('1')
+    await ui.press({ key: 'aller-bilan' })
+    expect(await onglet()).toBe('Bilan')
+    await ui.press({ key: 'aller-relire' })
+    expect(await onglet()).toBe('À relire (1)')
+    // « Détail » ouvre le panneau sur l'onglet déjà choisi
+    await ui.press({ key: 'detail' })
+    expect(await onglet()).toBe('À relire (1)')
+    await ui.unmount()
+  }
+  expect(w.ouverts).toEqual(Array(6).fill('orchestre (Échap ferme)'))
 })
 
 test('/suivi déjà pris par un autre plugin : le suivi démarre quand même et le dit', async ($, on) => {
@@ -237,13 +280,17 @@ const CMD = (args: string) => ({ command: 'suivi', args, origin: { kind: 'compos
 
 test('/suivi demo, sans dépôt : un run joué en mémoire, marqué DÉMO, ses notifications, puis retour au vrai suivi', { timeoutMs: 30000 }, async ($, on) => {
   const horloge = mock.clock(on, { now: T0 })
-  const toasts: string[] = [], lus: string[] = []
+  const toasts: string[] = [], lus: string[] = [], ouverts: string[] = [], fermes: string[] = []
   bas(on)
   on('fs.exists', ($, e) => { lus.push(e.path); return { value: false } })
   on('ui.toast', ($, e) => { toasts.push(e.text + (e.timeoutMs ? ` (${e.timeoutMs} ms)` : '')); return { value: undefined } })
+  on('ui.open', ($, e) => { ouverts.push(e.title ?? ''); return { value: { isPlaced: true as const } } })
+  on('ui.close', ($, e) => { fermes.push(e.id); return { value: undefined } })
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
   const r = await $.command.run(CMD('demo'))
   expect(r.text ?? '').toMatch(/^Démo lancée/)
+  expect((await $.command.run(CMD(''))).text ?? '').toMatch(/ouvert dans le panneau/)
+  expect(ouverts).toEqual(['Orchestre · site-vitrine (démo)'])
   const ui = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND })
   expect((await ui.find({ type: 'Text', text: ' DÉMO ' }))?.props.backgroundColor).toBe('merged')
   expect(await ui.find({ text: /^site-vitrine$/ })).toBeDefined()
@@ -260,9 +307,14 @@ test('/suivi demo, sans dépôt : un run joué en mémoire, marqué DÉMO, ses n
   expect(toasts).toContain('Run 2 (phases 1 à 2) : terminé')
   expect(toasts.at(-1) ?? '').toMatch(/^Démo terminée/)
   await ui.unmount()
-  // Une minute après la fin, le vrai suivi reprend : ici, rien à suivre
+  // Une minute après la fin, le vrai suivi reprend : ici, rien à suivre ; le panneau de la démo se ferme
+  expect(fermes).toEqual([])
   await horloge.advance(60000)
   expect(lus.length).toBeGreaterThan(avant)
+  expect(fermes).toEqual(['orchestre'])
+  const vide = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...PANE })
+  expect(await vide.find({ type: 'Text', text: /^Rien à suivre dans ce dépôt : aucun plans\/<nom>\/suivi\.json\. .*\/suivi demo joue la démo\.$/ })).toBeDefined()
+  await vide.unmount()
   const apres = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND })
   expect(await apres.find({ type: 'Text', text: ' DÉMO ' })).toBeUndefined()
   await apres.unmount()
@@ -281,7 +333,14 @@ test('/suivi demo dans un dépôt suivi : le vrai plan attend, /suivi auto y rev
   const ui = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND })
   expect(await ui.find({ text: /^site-vitrine$/ })).toBeDefined()
   await ui.unmount()
+  // Le panneau ouvert pendant la démo se ferme quand on revient au vrai suivi ; un panneau ouvert hors démo, non
+  await $.command.run(CMD(''))
+  expect(w.fermes).toEqual([])
   expect((await $.command.run(CMD('auto texte'))).text ?? '').toMatch(/^▶ demo {2}/)
+  expect(w.fermes).toEqual(['orchestre'])
+  await $.command.run(CMD(''))
+  await $.command.run(CMD('auto'))
+  expect(w.fermes).toEqual(['orchestre'])
   const vrai = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND })
   expect(await vrai.find({ type: 'Text', text: ' DÉMO ' })).toBeUndefined()
   expect(await vrai.find({ text: /^demo$/ })).toBeDefined()
@@ -293,6 +352,8 @@ test('« Masquer » pendant la démo ne masque pas le vrai run de même numéro'
   const w = monde(on)
   w.fichier.texte = FINI
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
+  // Un panneau ouvert avant la démo reste ouvert quand elle rend la main
+  await $.command.run(CMD(''))
   await $.command.run(CMD('demo'))
   // Le run 1 de la démo s'arrête sur son arbitrage : on le masque
   await horloge.advance(instantDuPas(11, 0) + 100)
@@ -301,6 +362,7 @@ test('« Masquer » pendant la démo ne masque pas le vrai run de même numéro'
   await ui.press({ key: 'masquer' })
   await ui.unmount()
   await $.command.run(CMD('auto'))
+  expect(w.fermes).toEqual([])
   const vrai = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND })
   expect(await vrai.find({ text: /^■ $/ })).toBeDefined()
   expect(await vrai.find({ text: /^demo$/ })).toBeDefined()

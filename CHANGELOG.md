@@ -2,6 +2,31 @@
 
 Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
 
+## 0.9.1 — 09/10/2026 : bandeau cliquable, onglets et fin de démo
+
+Retours de Fabien sur `/suivi demo`, vue sur le Mac en 0.9.0.
+
+- Bandeau :
+  - « ⚑ n à relire » et « ⚠ n à toi » viennent juste après l'avancement, avant les tâches en cours : ils ne bougent plus à chaque étape, le texte des tâches n'ayant jamais la même longueur.
+  - Ils se cliquent : « à relire » ouvre le panneau sur l'onglet À relire, « à toi » sur le Bilan (tâches qui attendent avec leur raison, prérequis ouverts, points à trancher). Un bouton n'a pas de fond coloré au repos : le glyphe garde sa couleur, la pastille ambre vient au survol.
+  - « /suivi pour le détail » devient le bouton « 1: Détail », qui ouvre le panneau sur l'onglet déjà choisi. La touche 1 marche aussi tapée seule dans un prompt vide, comme 0 pour « Masquer » : un prompt vide où l'on tape d'abord « 1 » ouvre le panneau.
+- Panneau :
+  - les quatre onglets restent des boutons, dans le même ordre : ↑↓ et Tab les parcourent sans sauter, le focus part de l'onglet ouvert, les autres sont estompés. L'onglet ouvert est rappelé en pastille, au début d'une ligne d'aide : « t r j b : onglet · Échap : fermer ».
+  - ← et → ne changent pas d'onglet : dans un panneau, ces touches sont à Claude Code, et un mod ne peut pas les capter (seul un élément `Client` lit les touches). ← peut donc faire sortir du panneau.
+  - Panneau vide : « Rien à suivre dans ce dépôt : aucun plans/<nom>/suivi.json… /suivi demo joue la démo. », au lieu de « Aucun suivi.json lu pour l'instant. ».
+- Fin de démo : le panneau ouvert pendant la démo, titré « (démo) », se ferme quand le vrai suivi reprend, une minute après le dernier pas ou à `/suivi auto`. Un panneau ouvert avant la démo reste ouvert.
+- Tests : 18 cas du modèle et 13 tests sous le moteur, dont un nouveau sur les clics du bandeau ; les 83 mutations du modèle, de la démo et des hooks, rejouées sur le code final, sont toutes détectées. Le kit de test ne rend pas le style de survol (`hover`).
+
+### Mettre à jour depuis la 0.9.0
+
+1. Entre deux runs : `/plugin marketplace update circle`, puis `/reload-plugins`.
+2. `/suivi demo` pour voir le bandeau cliquable.
+
+### Pas encore vérifié en réel
+
+- Le clic dans le bandeau sur le terminal du Mac : d'après la doc des mods, un clic donne le focus au bandeau ; sinon, Ctrl+X puis Tab, et Entrée.
+- La pastille ambre au survol des mentions.
+
 ## 0.9.0 — 09/10/2026 : le mod de suivi entre dans orchestre
 
 Le plugin `orchestre-suivi` (0.2.0) est fusionné dans `orchestre` : une seule installation, une seule version. « Unknown command: /suivi », vu sur le Mac le 09/10 avec orchestre 0.8.0 et orchestre-suivi 0.2.0, voulait dire que le mod n'était pas chargé ; la cause (installation du second plugin, version de Claude Code ou réglage) n'est pas établie. Avec un seul plugin, installer ou mettre à jour `orchestre` apporte `/suivi`.
