@@ -5,7 +5,7 @@ Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plu
 | Plugin | Version | Rôle |
 | :- | :- | :- |
 | `orchestre` | 0.8.1 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
-| `orchestre-suivi` | 0.1.0 | Mod de suivi d'un run `orchestre` dans la session pilote, en lecture seule sur `plans/<nom>/suivi.json` : bandeau en couleurs et animé au-dessus du prompt pendant un run (une case par tâche colorée par statut, phases en points, étape en cours, dernière nouvelle), suffixe du spinner, `/suivi` (panneau Tâches, À relire, Journal, Bilan, ou `/suivi texte`), `/suivi demo`, notifications, brouillon de PR dans le prompt. Facultatif : `orchestre` ne dépend pas de lui. |
+| `orchestre-suivi` | 0.2.0 | Mod de suivi d'un run `orchestre` dans la session pilote, en lecture seule sur `plans/<nom>/suivi.json` : bandeau en couleurs et animé au-dessus du prompt pendant un run (une case par tâche colorée par statut, phases en points, étape en cours, dernière nouvelle), suffixe du spinner, `/suivi` (panneau Tâches, À relire, Journal, Bilan, ou `/suivi texte`), `/suivi demo`, notifications, brouillon de PR dans le prompt. Facultatif : `orchestre` ne dépend pas de lui. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 

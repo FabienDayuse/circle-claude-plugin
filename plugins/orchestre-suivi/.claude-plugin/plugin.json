@@ -1,8 +1,8 @@
 {
   "name": "orchestre-suivi",
   "displayName": "Orchestre · suivi",
-  "version": "0.1.0",
-  "description": "Mod de suivi d'un run orchestre dans la session pilote : bandeau, spinner, /suivi (tâches, relectures, journal, bilan) et notifications, en lecture seule sur plans/<nom>/suivi.json.",
+  "version": "0.2.0",
+  "description": "Mod de suivi d'un run orchestre dans la session pilote : bandeau en couleurs et animé, spinner, /suivi (tâches, relectures, journal, bilan), notifications et /suivi demo, en lecture seule sur plans/<nom>/suivi.json.",
   "author": { "name": "Fabien Dauvergne" },
   "repository": "https://github.com/FabienDayuse/circle-claude-plugin",
   "keywords": ["orchestre", "suivi", "mod", "workflow"],
