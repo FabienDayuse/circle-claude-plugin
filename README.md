@@ -1,11 +1,10 @@
 # Circle — plugins Claude Code
 
-Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plugins). Elle contient deux plugins :
+Marketplace privée de plugins [Claude Code](https://code.claude.com/docs/en/plugins). Elle contient un plugin :
 
 | Plugin | Version | Rôle |
 | :- | :- | :- |
-| `orchestre` | 0.8.1 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. |
-| `orchestre-suivi` | 0.2.0 | Mod de suivi d'un run `orchestre` dans la session pilote, en lecture seule sur `plans/<nom>/suivi.json` : bandeau en couleurs et animé au-dessus du prompt pendant un run (une case par tâche colorée par statut, phases en points, étape en cours, dernière nouvelle), suffixe du spinner, `/suivi` (panneau Tâches, À relire, Journal, Bilan, ou `/suivi texte`), `/suivi demo`, notifications, brouillon de PR dans le prompt. Facultatif : `orchestre` ne dépend pas de lui. |
+| `orchestre` | 0.9.0 | Exécute un plan de dev découpé en tâches (`plans/<nom>/`, un fichier par tâche) depuis une session Claude Code pilote. Chaque phase du plan est un run du workflow `orchestre:executer-phase` : réalisation par des subagents, vérification, évaluation, corrections, fusion dans une branche d'intégration, suivi. Depuis la 0.9.0, il inclut le mod de suivi (auparavant le plugin `orchestre-suivi`), en lecture seule sur `plans/<nom>/suivi.json` : bandeau en couleurs et animé au-dessus du prompt pendant un run (une case par tâche colorée par statut, phases en points, étape en cours, dernière nouvelle), suffixe du spinner, `/suivi` (panneau Tâches, À relire, Journal, Bilan, ou `/suivi texte`), `/suivi demo`, notifications, brouillon de PR dans le prompt. |
 
 La logique d'orchestration a été mise au point sur un pilote de 15 tâches en 4 phases (SPACE-Platform, plan `acces-par-metier`). Historique des versions : [CHANGELOG.md](CHANGELOG.md).
 
@@ -24,11 +23,12 @@ Dans une session Claude Code :
 ```
 /plugin marketplace add FabienDayuse/circle-claude-plugin
 /plugin install orchestre@circle
-/plugin install orchestre-suivi@circle
 /reload-plugins
 ```
 
-`orchestre-suivi` est un mod (des hooks de fonctions) : il faut Claude Code 2.1.287 ou plus (`claude --version`), version à partir de laquelle les mods sont actifs par défaut ([doc des mods](https://code.claude.com/docs/en/plugins/mods/overview)). Il dessine dans le terminal et dans l'onglet Code de l'app de bureau ; dans le panneau de l'extension VS Code, sous `claude -p` et dans une session cloud, rien ne se dessine. `/plugin` dit s'il est chargé : la ligne sous les onglets nomme les mods actifs. Sur une version plus ancienne, seul ce plugin est concerné.
+Le suivi (bandeau, `/suivi`) est un mod, des hooks de fonctions : il faut Claude Code 2.1.287 ou plus (`claude --version`), version à partir de laquelle les mods sont actifs par défaut ([doc des mods](https://code.claude.com/docs/en/plugins/mods/overview)). Il dessine dans le terminal et dans l'onglet Code de l'app de bureau ; dans le panneau de l'extension VS Code, sous `claude -p` et dans une session cloud, rien ne se dessine. `/plugin` dit s'il est chargé : la ligne sous les onglets nomme les mods actifs, dont `orchestre`. Le comportement d'une version plus ancienne face au module de hooks n'a pas été essayé : si `/plugin` y signale une erreur sur `hooks/hooks.json`, mettre Claude Code à jour.
+
+Si `orchestre-suivi` est installé (0.2.0 et avant), le désinstaller : `/plugin uninstall orchestre-suivi@circle`. Sinon les deux mods réclament `/suivi` et le second venu ne l'a pas.
 
 Ou depuis un terminal :
 
@@ -84,7 +84,7 @@ Dans une session neuve. Pré-vol (version, réglages, git, nettoyage des worktre
 
 Pendant un run, la session pilote ne touche pas au checkout principal, où travaillent les agents : une demande sur le dépôt attend la fin du run. Un fichier que les agents n'ont pas le droit de lire ou d'écrire (réglages du projet ou de l'organisation), ou une commande qu'ils n'ont pas le droit de lancer, n'arrête pas le run : il devient une relecture, à faire toi-même avant la PR, avec la commande donnée à la fin.
 
-Suivre un run : `/suivi` si `orchestre-suivi` est installé (bandeau, panneau, notifications, sans tour de Claude), ou `/orchestre:etat`, ci-dessous, pour le plan ; `/workflows` pour l'étape de chaque agent. Depuis la 0.8.0, l'état du plan et des runs est aussi tenu dans `plans/<nom>/suivi.json` (hors git), que seul `scripts/suivi.mjs` écrit. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
+Suivre un run : `/suivi` (bandeau, panneau, notifications, sans tour de Claude), ou `/orchestre:etat`, ci-dessous, pour le plan ; `/workflows` pour l'étape de chaque agent. Depuis la 0.8.0, l'état du plan et des runs est aussi tenu dans `plans/<nom>/suivi.json` (hors git), que seul `scripts/suivi.mjs` écrit. Reprendre dans une session neuve : `/orchestre:lancer plans/<nom> --reprendre` (l'état est dans le plan et dans git). À la fin, la branche d'intégration est prête pour une PR : la fusion dans `main` et le déploiement restent des gestes humains.
 
 ### 5. `/orchestre:etat [plans/<nom>]` : voir où en est le plan
 
@@ -135,8 +135,9 @@ Si le mod ne montre rien ([dépannage des mods](https://code.claude.com/docs/en/
 - `claude --version` : 2.1.287 ou plus ;
 - `claude plugin test`, lancé dans un dossier sans mod, doit dire « no hooks module to load » ; sinon un réglage (`disableAllHooks`) ou une politique de l'organisation bloque les mods ;
 - l'invite de confiance du dossier doit avoir été acceptée ;
-- `/plugin` doit nommer `orchestre-suivi` sur la ligne des mods actifs ;
-- avec `--plugin-dir`, une ligne de la transcription dit pourquoi un dessin est refusé (`refused:`) ou un hook sauté (`hook skipped:`) ; pour un mod installé, ces lignes ne vont qu'au journal : `claude --debug-file mod.log`, puis chercher `orchestre-suivi` dans `mod.log`.
+- `/plugin` doit nommer `orchestre` sur la ligne des mods actifs ;
+- « Unknown command: /suivi » : le mod n'est pas chargé, voir les points ci-dessus ; `claude plugin list` doit montrer `orchestre@circle` en 0.9.0 ou plus ;
+- avec `--plugin-dir`, une ligne de la transcription dit pourquoi un dessin est refusé (`refused:`) ou un hook sauté (`hook skipped:`) ; pour un mod installé, ces lignes ne vont qu'au journal : `claude --debug-file mod.log`, puis chercher `orchestre` dans `mod.log`.
 
 ## Mettre à jour
 
@@ -194,7 +195,7 @@ Garde-fous : aucun agent ne pousse, ne fusionne dans `main` ni ne déploie ; auc
 ```
 .claude-plugin/marketplace.json      catalogue de la marketplace « circle »
 plugins/orchestre/
-├── .claude-plugin/plugin.json       manifeste (nom, version)
+├── .claude-plugin/plugin.json       manifeste (nom, version, contrat des types)
 ├── skills/installer/                /orchestre:installer, modèle de réglages
 ├── skills/preparer/                 /orchestre:preparer, format d'un plan
 ├── skills/pret/                     /orchestre:pret
@@ -202,15 +203,15 @@ plugins/orchestre/
 ├── skills/etat/                     /orchestre:etat
 ├── agents/                          les 9 agents du workflow
 ├── workflows/executer-phase.js      le workflow, un run par phase
-└── scripts/                         plan-lint.mjs (validation et compilation d'un plan), etat.mjs (/orchestre:etat), suivi.mjs (suivi.json et SUIVI.md), worktrees.mjs (nettoyage des worktrees)
-plugins/orchestre-suivi/
-├── .claude-plugin/plugin.json       manifeste ; types/index.d.ts, contrat de son état ($.state)
+├── scripts/                         plan-lint.mjs (validation et compilation d'un plan), etat.mjs (/orchestre:etat), suivi.mjs (suivi.json et SUIVI.md), worktrees.mjs (nettoyage des worktrees)
+├── hooks/hooks.json                 déclare le module du mod
 ├── hooks/register.tsx               le mod : fichiers, minuteur, dessin, /suivi
 ├── hooks/modele.mjs                 lecture de suivi.json et mise en forme, sans moteur
 ├── hooks/demo.mjs                   /suivi demo : le run joué en mémoire, pas à pas
+├── types/index.d.ts                 contrat de l'état du mod ($.state)
 └── tests/suivi.test.tsx             tests sous le moteur (claude plugin test)
 tests/
-├── orchestre-suivi.test.mjs         modèle du mod sur des suivi.json écrits par suivi.mjs
+├── mod-suivi.test.mjs               modèle du mod sur des suivi.json écrits par suivi.mjs
 ├── scenarios.mjs                    scénarios simulés du workflow
 ├── plan-lint.test.mjs               plan-lint sur des plans jouets
 ├── etat.test.mjs                    /orchestre:etat sur un dépôt jouet
@@ -225,12 +226,12 @@ tests/
 
 - Essayer une modification sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/reload-plugins` après chaque changement.
 - Tests : `npm test` : 87 scénarios du workflow, avec des agents simulés, dont 5 qui lancent les vrais `suivi.mjs` et `worktrees.mjs` dans un dépôt temporaire ; 17 cas de plan-lint, 7 de `/orchestre:etat`, 19 de `suivi.mjs` et 4 de `worktrees.mjs` dans des dépôts git temporaires ; le modèle de réglages de l'installer ; 18 cas du modèle du mod sur des `suivi.json` écrits par `suivi.mjs`, dont `/suivi demo` comparée au vrai `suivi.mjs`. Les 12 tests du mod sous le moteur passent par `npm run validate`.
-- Validation : `npm run validate` (`claude plugin validate` sur les deux plugins et sur la marketplace, puis `claude plugin test` du mod).
-- Essayer le mod sans l'installer : `claude --plugin-dir plugins/orchestre-suivi`, puis `/suivi demo` ; ou, sur un vrai `suivi.json`, `node tests/demo-suivi.mjs <dossier>` dans un autre terminal.
+- Validation : `npm run validate` (`claude plugin validate` sur le plugin et sur la marketplace, puis `claude plugin test` du plugin, qui lance les tests du mod).
+- Essayer le mod sans l'installer : `claude --plugin-dir plugins/orchestre`, puis `/suivi demo` ; ou, sur un vrai `suivi.json`, `node tests/demo-suivi.mjs <dossier>` dans un autre terminal.
 - Le script du workflow n'a pas accès aux fichiers et ne peut rien importer ; `Date.now()`, `Math.random()` et `new Date()` y sont interdits. Avant de le modifier, charger la référence `/workflow-authoring`.
 - Publier une version :
-  1. monter `version` dans `plugins/<plugin>/.claude-plugin/plugin.json` du plugin modifié : sans cela, personne ne reçoit la mise à jour ;
-  2. ajouter l'entrée dans son changelog (`CHANGELOG.md` pour `orchestre`, `plugins/orchestre-suivi/CHANGELOG.md` pour le mod) et mettre à jour la version dans le tableau en tête de ce README ;
+  1. monter `version` dans `plugins/orchestre/.claude-plugin/plugin.json` : sans cela, personne ne reçoit la mise à jour ;
+  2. ajouter l'entrée dans `CHANGELOG.md` et mettre à jour la version dans le tableau en tête de ce README ;
   3. `npm test && npm run validate` ;
   4. commiter et pousser sur `main` ;
   5. sur chaque machine : `/plugin marketplace update circle`.

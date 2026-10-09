@@ -1,5 +1,5 @@
-// Le scénario de /suivi demo (plugins/orchestre-suivi/hooks/demo.mjs) joué par le vrai scripts/suivi.mjs : un dépôt
-// jouet, puis deux runs pas à pas, sans agent ni modèle. tests/orchestre-suivi.test.mjs s'en sert pour vérifier que la
+// Le scénario de /suivi demo (plugins/orchestre/hooks/demo.mjs) joué par le vrai scripts/suivi.mjs : un dépôt
+// jouet, puis deux runs pas à pas, sans agent ni modèle. tests/mod-suivi.test.mjs s'en sert pour vérifier que la
 // démo du mod dit la même chose (notifications, journal). On peut aussi regarder une session ouverte dans le dépôt.
 // Après chaque pas, la démo affiche ce que le mod doit montrer, calculé par son propre modèle (hooks/modele.mjs), en
 // texte : dans Claude Code, le même bandeau est en couleurs et s'anime. Ce qui diffère dans la session vient du dessin
@@ -11,11 +11,11 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import * as M from '../plugins/orchestre-suivi/hooks/modele.mjs'
+import * as M from '../plugins/orchestre/hooks/modele.mjs'
 
 const ICI = dirname(fileURLToPath(import.meta.url))
 const SUIVI = resolve(ICI, '../plugins/orchestre/scripts/suivi.mjs')
-const MOD = resolve(ICI, '../plugins/orchestre-suivi')
+const MOD = resolve(ICI, '../plugins/orchestre')
 const args = process.argv.slice(2)
 const D = args.find(a => !a.startsWith('--')) && resolve(args.find(a => !a.startsWith('--')))
 const iPas = args.indexOf('--pas')
@@ -40,7 +40,7 @@ const TACHES = [
   { id: 'T04', titre: 'Tests de bout en bout', phase: 2, dep: ['T01', 'T02'] },
   { id: 'T05', titre: 'Documentation', phase: 2, dep: ['T03'] },
 ]
-const frontmatter = t => `---\nid: ${t.id}\ntitre: ${t.titre}\nphase: ${t.phase}\nmodele: sonnet\ndepend_de: [${t.dep.join(', ')}]\nfichiers_possedes:\n  - src/${t.id}.txt\nressources: []\nestimation_tokens: 0.4M\nverification:\n  - "test -f src/${t.id}.txt"\ndefinition_du_fini:\n  - "src/${t.id}.txt existe"\n---\n\nTâche de démonstration du mod orchestre-suivi : rien n'est réalisé, la démo écrit le suivi elle-même.\n`
+const frontmatter = t => `---\nid: ${t.id}\ntitre: ${t.titre}\nphase: ${t.phase}\nmodele: sonnet\ndepend_de: [${t.dep.join(', ')}]\nfichiers_possedes:\n  - src/${t.id}.txt\nressources: []\nestimation_tokens: 0.4M\nverification:\n  - "test -f src/${t.id}.txt"\ndefinition_du_fini:\n  - "src/${t.id}.txt existe"\n---\n\nTâche de démonstration du suivi orchestre : rien n'est réalisé, la démo écrit le suivi elle-même.\n`
 
 function creerDepot() {
   const dir = join(D, 'plans', 'demo')
@@ -49,7 +49,7 @@ function creerDepot() {
   git('init', '-q')
   git('checkout', '-q', '-b', 'main')
   git('config', 'user.email', 'demo@orchestre.invalid'); git('config', 'user.name', 'demo orchestre'); git('config', 'commit.gpgsign', 'false')
-  writeFileSync(join(D, 'README.md'), '# Démo du mod orchestre-suivi\n\nDépôt jouet créé par tests/demo-suivi.mjs ; il peut être supprimé.\n')
+  writeFileSync(join(D, 'README.md'), "# Démo du mod de suivi d'orchestre\n\nDépôt jouet créé par tests/demo-suivi.mjs ; il peut être supprimé.\n")
   writeFileSync(join(D, 'src', '.gitkeep'), '')
   git('add', '.'); git('commit', '-qm', 'init')
   for (const t of TACHES) writeFileSync(join(dir, 'taches', `${t.id}.md`), frontmatter(t))
@@ -129,16 +129,16 @@ Ouvre une session Claude Code dans ce dossier, avec le mod :
   cd "${D}" && claude --plugin-dir "${MOD}"
 (ou, s'il est déjà installé depuis la marketplace : cd "${D}" && claude)
 Accepte l'invite de confiance du dossier : sans elle, aucun mod ne se charge.
-Vérifie avec /plugin qu'il est chargé : la ligne sous les onglets doit nommer orchestre-suivi.
+Vérifie avec /plugin qu'il est chargé : la ligne sous les onglets doit nommer orchestre.
 Le mod relit suivi.json toutes les 2 s : chaque pas ci-dessous doit apparaître dans la session en 2 s au plus.
 Ci-dessous, le texte attendu ; dans la session, le bandeau est en couleurs (une case par tâche, verte quand elle est
 fusionnée, bleue quand elle est en cours, ambre quand elle attend quelqu'un) et s'anime pendant le run.
 Le suffixe du spinner ne se voit que pendant que Claude travaille : pendant un run, demande-lui par exemple
 « lance sleep 60 dans Bash ».
 
-Si rien n'apparaît : avec --plugin-dir, la transcription porte une ligne « orchestre-suivi: … refused: » ou
+Si rien n'apparaît : avec --plugin-dir, la transcription porte une ligne « orchestre: … refused: » ou
 « … hook skipped: » qui dit pourquoi. Sinon, relance la session avec --debug-file mod.log et cherche
-orchestre-suivi dans ce fichier (grep orchestre-suivi mod.log).`)
+« orchestre: » dans ce fichier (grep "orchestre:" mod.log).`)
 await entree('\nEntrée pour lancer le run 1… ')
 await jouer(RUN1, 1)
 bilan()

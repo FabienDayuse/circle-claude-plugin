@@ -8,12 +8,7 @@
     {
       "name": "orchestre",
       "source": "./plugins/orchestre",
-      "description": "Exécute un plan de dev (plans/<nom>) phase par phase avec des subagents : réalisation, vérification, évaluation, corrections, fusion et suivi."
-    },
-    {
-      "name": "orchestre-suivi",
-      "source": "./plugins/orchestre-suivi",
-      "description": "Mod de suivi d'un run orchestre dans la session pilote : bandeau, spinner, /suivi et notifications, en lecture seule sur plans/<nom>/suivi.json."
+      "description": "Exécute un plan de dev (plans/<nom>) phase par phase avec des subagents : réalisation, vérification, évaluation, corrections, fusion et suivi, avec bandeau, /suivi et /suivi demo dans la session pilote."
     }
   ]
 }

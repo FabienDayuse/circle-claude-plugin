@@ -1,4 +1,4 @@
-// Mod orchestre-suivi : suit un run du plugin orchestre dans la session pilote, en lecture seule.
+// Le mod du plugin orchestre : suit un run dans la session pilote, en lecture seule.
 // Il lit plans/<nom>/suivi.json (orchestre-suivi/1), que seul scripts/suivi.mjs d'orchestre écrit, et dessine :
 //   - un bandeau au-dessus du prompt pendant un run (phase, avancement, en cours, à relire, durée) ;
 //   - un suffixe au spinner (tâche et étape en cours) ;
@@ -13,16 +13,16 @@ import type { Instantane, Ligne, Onglet } from '../types'
 import { NB_PAS, PAS_DEMO_MS, PLAN_DEMO, finDemo, instantaneDemo, pasA } from './demo.mjs'
 import { DUREE_IMPORTANTE_MS, FORMAT, IMAGE_MS, bandeau, changements, formatDe, importante, lignesBilan, lignesJournal, lignesRelire, lignesTaches, normaliser, nouvelle, runActif, runEnCours, suffixe, texteEtat, textePR } from './modele.mjs'
 
-const PANNEAU = 'orchestre-suivi'
+const PANNEAU = 'orchestre'
 const RELIRE_MS = 2000
 // Un run interrompu (« sans nouvelles ») ne s'anime plus : son âge avance toutes les 30 s
 const LENT_MS = 30000
-const instantane = atom({ plugin: 'orchestre-suivi', key: 'instantane' } as const, null)
-const planSuivi = atom({ plugin: 'orchestre-suivi', key: 'plan' } as const, null)
-const lu = atom({ plugin: 'orchestre-suivi', key: 'lu' } as const, 0)
-const onglet = atom({ plugin: 'orchestre-suivi', key: 'onglet' } as const, 'taches')
-const masque = atom({ plugin: 'orchestre-suivi', key: 'masque' } as const, null)
-const alerte = atom({ plugin: 'orchestre-suivi', key: 'alerte' } as const, null)
+const instantane = atom({ plugin: 'orchestre', key: 'instantane' } as const, null)
+const planSuivi = atom({ plugin: 'orchestre', key: 'plan' } as const, null)
+const lu = atom({ plugin: 'orchestre', key: 'lu' } as const, 0)
+const onglet = atom({ plugin: 'orchestre', key: 'onglet' } as const, 'taches')
+const masque = atom({ plugin: 'orchestre', key: 'masque' } as const, null)
+const alerte = atom({ plugin: 'orchestre', key: 'alerte' } as const, null)
 
 // Place du bouton « Masquer » (« 0: Masquer ») à la suite du bandeau
 const RESERVE_MASQUER = 12
@@ -90,7 +90,7 @@ async function rafraichir($: EngineInterface, force: boolean): Promise<void> {
     const format = formatDe(doc) ?? 'inconnu'
     if ((await read($, alerte)) !== format) {
       await update($, alerte, () => format)
-      $.ui.toast(`${plan}/suivi.json est au format ${format} ; ce mod lit ${FORMAT}. Mets à jour orchestre-suivi.`, { timeoutMs: DUREE_IMPORTANTE_MS })
+      $.ui.toast(`${plan}/suivi.json est au format ${format} ; ce mod lit ${FORMAT}. Mets à jour le plugin orchestre.`, { timeoutMs: DUREE_IMPORTANTE_MS })
     }
     return
   }
@@ -156,7 +156,7 @@ async function demarrer($: EngineInterface): Promise<void> {
   try {
     await $.command.register({ name: 'suivi', description: 'Suivi du plan orchestre : tâches, relectures, journal, bilan', argumentHint: '[plans/<nom> | auto | demo] [texte]', immediate: true })
   } catch (err) {
-    $.ui.toast(`orchestre-suivi : /suivi n'a pas pu être ajoutée (${err instanceof Error ? err.message : String(err)}). Le bandeau et les notifications restent actifs.`, { timeoutMs: DUREE_IMPORTANTE_MS })
+    $.ui.toast(`orchestre : /suivi n'a pas pu être ajoutée (${err instanceof Error ? err.message : String(err)}). Le bandeau et les notifications restent actifs.`, { timeoutMs: DUREE_IMPORTANTE_MS })
   }
 }
 
@@ -219,7 +219,7 @@ export const register: Register = on => {
     if (plan || mots.includes('auto')) await quitterDemo($)
     await rafraichir($, true).catch(() => undefined)
     const inst = await read($, instantane)
-    if (!inst) return { text: 'orchestre-suivi : aucun plans/<nom>/suivi.json dans ce dépôt. Il apparaît au premier run d\'orchestre 0.8 ou plus. Pour voir le mod à l\'œuvre : /suivi demo.' }
+    if (!inst) return { text: 'orchestre : aucun plans/<nom>/suivi.json dans ce dépôt. Il apparaît au premier run d\'orchestre 0.8 ou plus. Pour voir le mod à l\'œuvre : /suivi demo.' }
     const maintenant = await $.clock.now()
     if (mots.includes('texte')) return { text: texteEtat(inst, maintenant) }
     const ouvert = await $.ui.open({ id: PANNEAU, title: `Orchestre · ${inst.plan}${inst.demo ? ' (démo)' : ''}`, focus: true, closeOnEscape: true }).catch(() => null)

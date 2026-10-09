@@ -1,16 +1,16 @@
-// Tests du modèle du mod orchestre-suivi (plugins/orchestre-suivi/hooks/modele.mjs) sur des suivi.json écrits par le
+// Tests du modèle du mod de suivi d'orchestre (plugins/orchestre/hooks/modele.mjs et demo.mjs) sur des suivi.json écrits par le
 // vrai scripts/suivi.mjs dans un dépôt git temporaire. Les hooks eux-mêmes se testent par `claude plugin test`.
-// Usage : node tests/orchestre-suivi.test.mjs
+// Usage : node tests/mod-suivi.test.mjs
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync, spawnSync } from 'node:child_process'
-import * as M from '../plugins/orchestre-suivi/hooks/modele.mjs'
-import * as D from '../plugins/orchestre-suivi/hooks/demo.mjs'
+import * as M from '../plugins/orchestre/hooks/modele.mjs'
+import * as D from '../plugins/orchestre/hooks/demo.mjs'
 
 const SUIVI = resolve('plugins/orchestre/scripts/suivi.mjs')
-const racine = mkdtempSync(join(tmpdir(), 'orchestre-suivi-'))
+const racine = mkdtempSync(join(tmpdir(), 'mod-suivi-'))
 const git = (...a) => execFileSync('git', a, { cwd: racine, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const d = join(racine, 'plans', 'demo')
 const tache = (id, phase, depend_de = []) => `---\nid: ${id}\ntitre: Tâche ${id} au titre long du frontmatter\nphase: ${phase}\nmodele: sonnet\ndepend_de: [${depend_de.join(', ')}]\nfichiers_possedes:\n  - src/${id}/**\nressources: []\nestimation_tokens: 1.0M\nverification:\n  - "npm test"\ndefinition_du_fini:\n  - "le test passe"\n---\n`
@@ -286,7 +286,7 @@ try {
     assert.equal(D.pasA(D.finDemo(T), T), D.NB_PAS - 1)
   })
 
-  console.log(`orchestre-suivi : TOUT EST VERT (${n} cas)`)
+  console.log(`mod de suivi : TOUT EST VERT (${n} cas)`)
 } finally {
   rmSync(racine, { recursive: true, force: true })
 }

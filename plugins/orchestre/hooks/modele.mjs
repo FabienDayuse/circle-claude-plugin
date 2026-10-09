@@ -1,5 +1,5 @@
 // @ts-check
-// Modèle du mod orchestre-suivi : lit plans/<nom>/suivi.json (contrat orchestre-suivi/1, écrit par
+// Modèle du mod de suivi d'orchestre : lit plans/<nom>/suivi.json (contrat orchestre-suivi/1, écrit par
 // scripts/suivi.mjs du plugin orchestre) et en tire ce que le mod affiche. Fonctions pures, sans `$` :
 // register.tsx s'occupe du moteur (fichiers, minuteur, dessin), tests/modele.test.mjs les vérifie sous Node.
 

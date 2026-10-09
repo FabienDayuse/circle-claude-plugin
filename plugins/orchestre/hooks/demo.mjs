@@ -2,7 +2,7 @@
 // Mode démo du mod (/suivi demo) : un run joué en mémoire, sans dépôt ni fichier. Chaque pas donne un document
 // orchestre-suivi/1 tel que scripts/suivi.mjs l'écrirait (mêmes champs, mêmes textes de journal), que le mod passe par
 // normaliser() comme un vrai suivi.json. tests/demo-suivi.mjs joue le même scénario avec le vrai suivi.mjs, et
-// tests/orchestre-suivi.test.mjs vérifie que les deux annoncent les mêmes notifications et que ces documents
+// tests/mod-suivi.test.mjs vérifie que les deux annoncent les mêmes notifications et que ces documents
 // respectent le schéma du contrat.
 
 import { normaliser } from './modele.mjs'

@@ -1,4 +1,4 @@
-// Contrat du mod orchestre-suivi : ce qu'il garde dans $.state, et le modèle qu'il tire de suivi.json
+// Contrat du mod d'orchestre : ce qu'il garde dans $.state, et le modèle qu'il tire de suivi.json
 // (orchestre-suivi/1, voir hooks/modele.mjs). Dates en millisecondes depuis l'époque.
 
 export type Statut = 'à-faire' | 'ajoutée' | 'fusionnée' | 'bloquée' | 'échec' | 'besoin-humain' | 'annulée'
@@ -68,7 +68,7 @@ export type Onglet = 'taches' | 'relire' | 'journal' | 'bilan'
 
 declare module 'claude-code' {
   interface PluginState {
-    'orchestre-suivi': {
+    'orchestre': {
       // Dernière lecture valide de suivi.json, null tant qu'aucun plan n'est suivi
       instantane: Instantane | null
       // Plan choisi par /suivi plans/<nom> ; null : le suivi.json écrit en dernier (/suivi auto y revient)
