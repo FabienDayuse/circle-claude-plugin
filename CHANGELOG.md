@@ -2,6 +2,20 @@
 
 Jusqu'à la 0.5, chaque version vient du pilote SPACE-Platform (plan `acces-par-metier`, 15 tâches, 4 phases). La 0.6.0 change l'empaquetage ; les suivantes viennent du premier projet mené avec le plugin (plan `mr-review-recall`).
 
+## 0.10.1 — 10/10/2026 : boutons du bandeau à cliquer, avec une icône
+
+Demandé par Fabien après la 0.10.0 : plus de touche 1 pour « Détail » ni de touche 0 pour « Masquer », mais une icône qui dit qu'on peut cliquer.
+
+- « 1: Détail » devient « ⤢ Détail » (pastille orange au survol), « 0: Masquer » devient « ✕ Masquer » (estompé). Les deux se cliquent et n'ont plus de touche : un 1 ou un 0 tapé en premier dans un prompt vide s'écrit de nouveau dans le prompt.
+- La place gardée au bout du bandeau passe de 12 à 11 cellules pour « ⤢ Détail », et de 12 à 10 pour « ✕ Masquer ».
+- Dans le panneau, rien ne change : r, b, t, j, 1 à 9, l et p restent des touches, parce qu'elles ne touchent pas au prompt.
+- La démo dit « clique « ⤢ Détail » au bout du bandeau » au premier pas.
+- Tests : 19 cas du modèle et 15 tests sous le moteur ; 108 des 110 mutations détectées, dont « Détail garde la touche 1 » et « Masquer garde la touche 0 » ; les 2 autres ne changent que le défilement vers une carte, que le kit de test ne voit pas.
+
+### Mettre à jour depuis la 0.10.0
+
+Entre deux runs : `/plugin marketplace update circle`, puis `/reload-plugins`.
+
 ## 0.10.0 — 09/10/2026 : refonte du suivi, une vue en cartes
 
 D'après l'artefact « Refonte du suivi Orchestre » (UI inspirée de Flightdeck) et les choix de Fabien : une vue en cartes, un bandeau sur une ligne, les pistes UX-1, UX-2, UX-3, UX-5, UX-6, UX-7, UX-8 et UX-9.

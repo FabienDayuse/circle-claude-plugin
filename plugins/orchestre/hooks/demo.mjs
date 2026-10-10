@@ -163,7 +163,7 @@ export function instantaneDemo(k, debut, pas = PAS_DEMO_MS) {
 
 // Ce qu'il y a à regarder ou à essayer à certains pas, dans l'en-tête du panneau
 const GESTES = /** @type {Record<number, string>} */ ({
-  0: 'clique « Détail » au bandeau, ou tape 1 dans un prompt vide',
+  0: 'clique « ⤢ Détail » au bout du bandeau pour ouvrir le panneau',
   1: 'la frise de chaque tâche se colorie étape par étape',
   4: 'la correction passe en ambre dans la frise de T02',
   6: '« ⚑ 1 à relire » se clique au bandeau',

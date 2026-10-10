@@ -201,24 +201,24 @@ const FINI = doc([tache('T01', 1, { statut: 'fusionnée', essais: 1 }), tache('T
   relectures: [{ tache: 'T01', phase: 1, texte: '.env.example : ajouter MR_MAX', run: 1, quand: '2026-10-08T11:40:00+02:00' }],
 })
 
-test('fin de run : « Masquer » sur la touche 0, place des boutons gardée, masqué encore après /clear', async ($, on) => {
+test('fin de run : « ✕ Masquer » se clique, sans touche, place des boutons gardée, masqué encore après /clear', async ($, on) => {
   mock.clock(on, { now: T0 })
   const memoire = etat(on)
   const w = monde(on)
   w.fichier.texte = FINI
   await $.session.start({ cwd: RACINE, surface: 'terminal', isInteractive: true })
-  // Une largeur où les libellés tiennent avec un seul bouton (12 cellules), pas avec « 1: Détail » et « 0: Masquer » (24)
+  // Une largeur où les libellés tiennent avec « ⤢ Détail » seul (11 cellules), pas avec « ✕ Masquer » en plus (21)
   const inst = normaliser(JSON.parse(FINI))!
   const relire = (colonnes: number, reserve: number) => bandeau(inst, T0, colonnes, reserve)!.find(m => m.k === 'relire')?.t
-  let colonnes = largeur(bandeau(inst, T0, 1000)!) + 24
-  while (colonnes > 40 && !(relire(colonnes, 24) === '1' && relire(colonnes, 12) === '1 à relire')) colonnes--
-  expect([relire(colonnes, 24), relire(colonnes, 12)]).toEqual(['1', '1 à relire'])
+  let colonnes = largeur(bandeau(inst, T0, 1000)!) + 21
+  while (colonnes > 40 && !(relire(colonnes, 21) === '1' && relire(colonnes, 11) === '1 à relire')) colonnes--
+  expect([relire(colonnes, 21), relire(colonnes, 11)]).toEqual(['1', '1 à relire'])
   const ui = await $.ui.mount({ plugin: 'orchestre', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: colonnes } })
   expect(await ui.find({ text: /■ / })).toBeDefined()
   expect((await ui.find({ type: 'Button', key: 'aller-relire' }))?.props.label).toBe('1')
-  expect((await ui.find({ key: 'detail' }))?.props.hotkey).toBe('1')
-  const bouton = await ui.find({ key: 'masquer' })
-  expect(bouton?.props.hotkey).toBe('0')
+  // Deux boutons à cliquer, avec leur icône, sans touche
+  const detail = await ui.find({ key: 'detail' }), bouton = await ui.find({ key: 'masquer' })
+  expect([detail?.props.label, detail?.props.hotkey, bouton?.props.label, bouton?.props.hotkey]).toEqual(['⤢ Détail', undefined, '✕ Masquer', undefined])
   expect(w.statuts).toEqual([])
   await ui.press({ key: 'masquer' })
   await ui.unmount()
@@ -247,7 +247,7 @@ test('bandeau : « à relire » et « à toi » ouvrent le panneau sur la carte 
     expect((await ui.find({ type: 'Text', text: '⚠ ' }))?.props.color).toBe('warning')
     expect((await ui.find({ type: 'Button', key: 'aller-toi' }))?.props.label).toBe('1 à toi')
     expect((await ui.find({ type: 'Button', key: 'aller-relire' }))?.props.label).toBe('1 à relire')
-    expect((await ui.find({ type: 'Button', key: 'detail' }))?.props.hotkey).toBe('1')
+    expect((await ui.find({ type: 'Button', key: 'detail' }))?.props.label).toBe('⤢ Détail')
     await ui.press({ key: 'aller-toi' })
     await ui.press({ key: 'aller-relire' })
     await ui.press({ key: 'detail' })

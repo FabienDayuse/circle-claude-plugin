@@ -147,7 +147,7 @@ Le run 1 s'est arrêté sur un arbitrage. Dans la session, essaie :
   /suivi            le panneau en cartes : r (À toi), b (le run), t (les tâches), j (le journal) ; 1 à 9, l et p préparent une action dans le prompt ;
                     Échap le ferme
   /suivi texte      le même état en texte
-  0                 tapé seul dans le prompt vide, puis une pause : « Masquer », au bout du bandeau, le fait disparaître
+  ✕ Masquer         au bout du bandeau, à cliquer : le bandeau de fin disparaît
                     jusqu'au run suivant`)
 await entree('\nEntrée pour lancer le run 2… ')
 await jouer(RUN2, RUN1.length + 1)

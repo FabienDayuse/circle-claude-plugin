@@ -31,9 +31,10 @@ const journalComplet = atom({ plugin: 'orchestre', key: 'journal' } as const, fa
 const masque = atom({ plugin: 'orchestre', key: 'masque' } as const, null)
 const alerte = atom({ plugin: 'orchestre', key: 'alerte' } as const, null)
 
-// Place des boutons à la suite du bandeau : « 1: Détail », toujours, et « 0: Masquer » à la fin d'un run
-const RESERVE_DETAIL = 12
-const RESERVE_MASQUER = 12
+// Place des boutons à la suite du bandeau : « ⤢ Détail », toujours, et « ✕ Masquer » à la fin d'un run. Ils se cliquent,
+// sans touche : un chiffre tapé seul dans un prompt vide les aurait pressés au lieu de l'écrire.
+const RESERVE_DETAIL = 11
+const RESERVE_MASQUER = 10
 
 // /clear, /resume et /branch remettent $.state à ses valeurs par défaut sans relancer session.start : les deux choix de
 // la personne y sont gardés aussi, pour les rétablir (classic.SessionStart). Un rechargement du module, lui, garde $.state.
@@ -290,8 +291,8 @@ export const register: Register = on => {
   })
 
   // Le bandeau : pendant un run, puis l'état de fin jusqu'à ce qu'on le masque ou qu'un run reparte. La bande est partagée :
-  // ce que dessinent les mods suivants (next) reste dessous. « Masquer » a la touche 0, qui marche aussi tapée seule dans
-  // un prompt vide, sans donner le focus au bandeau.
+  // ce que dessinent les mods suivants (next) reste dessous. « ⤢ Détail » ouvre le panneau, « ✕ Masquer » cache le bandeau
+  // de fin : deux boutons à cliquer, au bout de la ligne.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inst = await read($, instantane)
     if (!inst || !inst.run || e.props.hasSurvey) return next(e)
@@ -307,9 +308,9 @@ export const register: Register = on => {
         <Box key="orchestre" flexDirection="row">
           {dessiner($, e, ligne, 'bandeau')}
           <Text>{'   '}</Text>
-          <Button key="detail" label="Détail" hotkey="1" plain onPress={() => ouvrirDepuisBandeau($, null)} />
+          <Button key="detail" label="⤢ Détail" plain hover={{ scope: 'orchestre-detail', color: 'inverseText', backgroundColor: 'claude', bold: true }} onPress={() => ouvrirDepuisBandeau($, null)} />
           {fini && <Text> </Text>}
-          {fini && <Button key="masquer" label="Masquer" hotkey="0" plain onPress={async () => { masqueChoisi = numero; await update($, masque, () => numero); await majStatut($) }} />}
+          {fini && <Button key="masquer" label="✕ Masquer" plain dimColor onPress={async () => { masqueChoisi = numero; await update($, masque, () => numero); await majStatut($) }} />}
         </Box>
         {autres}
       </Box>
@@ -388,7 +389,7 @@ async function ouvrirPanneau($: EngineInterface, inst: Instantane, vers: Section
   return true
 }
 
-// Un clic dans le bandeau (« Détail », « à relire », « à toi »), ou la touche 1 tapée seule dans un prompt vide
+// Un clic dans le bandeau : « ⤢ Détail », « à relire », « à toi »
 async function ouvrirDepuisBandeau($: EngineInterface, vers: Section | null): Promise<void> {
   const inst = await read($, instantane)
   if (inst && !(await ouvrirPanneau($, inst, vers))) $.ui.toast('Le panneau ne s\'ouvre pas ici : /suivi texte donne le même état.')
